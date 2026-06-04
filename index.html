@@ -2,14 +2,14 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Hayashi Design Works — Ink</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
 <style>
   html, body { margin:0; height:100%; overflow:hidden; background:#0a0a0b;
-    /* iframe内でのタッチがスクロール/ズームに食われないように */
-    touch-action:none; -webkit-user-select:none; user-select:none;
-    overscroll-behavior:none; }
+    /* pan-y: 縦スワイプはページスクロールに渡す。横/タップは作品が拾う */
+    -webkit-user-select:none; user-select:none; }
+  html, body, canvas { touch-action:pan-y; }
   canvas { display:block; }
 </style>
 </head>
@@ -51,11 +51,12 @@ let DPR = 1;
 
 /* ===== setup ===== */
 function setup(){
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  // 軽量化: スマホは等倍、PCも控えめ（塗り面積=DPR^2 が効くので効果大）
+  const small = min(windowWidth, windowHeight) < 700;
+  DPR = small ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
   pixelDensity(DPR);
   createCanvas(windowWidth, windowHeight);
-  // スマホは粒数を抑える
-  if (min(windowWidth, windowHeight) < 600) CONFIG.maxParts = 600;
+  if (small) CONFIG.maxParts = 380;
   makeBlob();
   paintBg(255);
   frameRate(60);
@@ -191,22 +192,22 @@ function drawHint(){
   pop();
 }
 
-/* ===== input: touch（マルチタッチ）===== */
+/* ===== input: touch（マルチタッチ）=====
+   重要: preventDefault しない（return false しない）。
+   縦スワイプは touch-action:pan-y でページスクロールに渡す。 */
 function touchStarted(){
   registerTap();
   handleTouches(true);
-  return false; // スクロール/ズーム抑止
+  // return しない = ブラウザのスクロールを邪魔しない
 }
 function touchMoved(){
   handleTouches(false);
-  return false;
 }
 function touchEnded(){
   // 終了したタッチの記録を掃除
   const live = {};
   for (const tc of touches){ if (tc.id != null) live[tc.id] = true; }
   for (const id in lastTouchInfo){ if (!live[id]) delete lastTouchInfo[id]; }
-  return false;
 }
 
 function handleTouches(isStart){
@@ -228,8 +229,8 @@ function emitFrom(id, x, y, isStart){
   if (prev && !isStart){ vx = x - prev.x; vy = y - prev.y; }
   lastTouchInfo[id] = { x, y };
   const speed = mag(vx, vy);
-  // 速いほど多く吐く。タップだけでも軽く滲ませる
-  const burst = constrain(floor(speed * 0.4) + (isStart ? 4 : 2), 2, 10);
+  // 速いほど多く吐く。軽量化のため控えめに
+  const burst = constrain(floor(speed * 0.25) + (isStart ? 3 : 1), 1, 7);
   spawn(x, y, vx, vy, burst);
 }
 
