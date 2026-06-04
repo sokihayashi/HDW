@@ -31,17 +31,28 @@
 /* ===== CONFIG ===== */
 const CONFIG = {
   accent: [0.20, 0.55, 1.0],   // 差し色(青)。朱:[1.0,0.30,0.20] 緑:[0.16,0.85,0.60]
-  // 適応解像度の範囲（レンダ長辺px）
+  // 適応解像度の範囲（レンダ長辺px）— 文字を読ませたいので下限を上げ気味
   res: {
-    startMobile: 620,  startDesktop: 940,
-    maxMobile:   980,  maxDesktop:  1320,
-    min:         360,
+    startMobile: 660,  startDesktop: 1000,
+    maxMobile:   1040, maxDesktop:  1360,
+    min:         500,
   },
+  // 背景に置く文字（= ガラスが屈折させる。ロゴ/タイポとの関わり）
+  bgLines: ['HAYASHI', 'DESIGN', 'WORKS'],
+  bgFoot:  'Soki Hayashi Designworks',
+  bgInk:   238,    // 文字色 (0-255 グレースケール)
+  bgPaper: 12,     // 背景色
+  // ガラスの質感
+  glassTint:  0.55,  // 透け具合 (1.0=クリアガラス, 小さいほど黒い艶ガラス=YouFab風)
+  lens:       0.22,  // 屈折で背景がズレる量(レンズの強さ)
+  dispersion: 0.05,  // 色収差(分光)の強さ
+  flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
 };
 
-let myShader, cnv;
+let myShader, cnv, bgTex;
 let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
 let fpsAvg = 60, adjustCool = 0;
+let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
 let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
@@ -76,6 +87,32 @@ function reflow(){
   const r = renderSize();
   resizeCanvas(r.w, r.h);
   applyDisplaySize();
+  buildBgTex();
+}
+
+/* 背景テクスチャ(=ロゴ/タイポ)を生成。ガラスがこれを屈折させる */
+function buildBgTex(){
+  if (bgTex) bgTex.remove();
+  const g = createGraphics(width, height);
+  g.pixelDensity(1);
+  g.background(CONFIG.bgPaper);
+  g.noStroke();
+  g.fill(CONFIG.bgInk);
+  g.textFont('Helvetica');
+  g.textStyle(BOLD);
+  g.textAlign(LEFT, TOP);
+  const mgn = g.width * 0.06;
+  const size = g.height * 0.155;
+  g.textSize(size);
+  let y = g.height * 0.07;
+  for (let i = 0; i < CONFIG.bgLines.length; i++){
+    g.text(CONFIG.bgLines[i], mgn, y);
+    y += size * 0.92;
+  }
+  g.textStyle(NORMAL);
+  g.textSize(max(10, g.height * 0.016));
+  g.text(CONFIG.bgFoot, mgn, g.height * 0.95);
+  bgTex = g;
 }
 
 function setup(){
@@ -88,6 +125,7 @@ function setup(){
   applyDisplaySize();
   myShader = createShader(vs, fs);
   noStroke();
+  buildBgTex();
   for (let i = 0; i < numDrops; i++){
     const v = p5.Vector.random3D().mult(1.0);
     currentDirs.push(v.x, v.y, v.z);
@@ -147,6 +185,7 @@ function draw(){
   }
   targetAudioLevel *= 0.95;
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
+  fine *= 0.990;   // 細かさはゆっくり戻る（連打で蓄積→徐々に再合体）
 
   myShader.setUniform('u_resolution', [float(width), float(height)]);
   myShader.setUniform('u_time', now / 1000.0);
@@ -157,6 +196,12 @@ function draw(){
   myShader.setUniform('u_masses', masses);
   myShader.setUniform('u_accent', CONFIG.accent);
   myShader.setUniform('u_pull', [pullX, pullY]);
+  myShader.setUniform('u_fine', fine);
+  myShader.setUniform('u_bg', bgTex);
+  myShader.setUniform('u_glassTint', CONFIG.glassTint);
+  myShader.setUniform('u_lens', CONFIG.lens);
+  myShader.setUniform('u_disp', CONFIG.dispersion);
+  myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -184,7 +229,8 @@ function pulse(audio, lo, hi){
 function poke(px, py){
   tmx = map(px, 0, width, -1.0, 1.0);
   tmy = map(py, 0, height, 1.0, -1.0);
-  pulse(5.5, 3.5, 6.5);   // 連打=飛沫が大きく散る
+  fine = min(1.0, fine + 0.24);   // 連打でどんどん細かく霧化
+  pulse(3.5, 1.0, 2.2);           // 飛び回りは控えめ（細かさで魅せる）
   lastInteract = millis();
 }
 function dragRotate(){
@@ -226,7 +272,13 @@ const fs = `
   uniform vec3  u_directions[16];
   uniform float u_masses[16];
   uniform vec3  u_accent;
-  uniform vec2  u_pull;   // 指で引いている向き(尾を引く/body を引っ張る)
+  uniform vec2  u_pull;       // 指で引いている向き(尾を引く/body を引っ張る)
+  uniform float u_fine;       // 細かさ(連打で増える)
+  uniform sampler2D u_bg;     // 背景テクスチャ(ロゴ/タイポ)
+  uniform float u_glassTint;  // ガラスの透け具合
+  uniform float u_lens;       // 屈折の強さ
+  uniform float u_disp;       // 色収差の強さ
+  uniform float u_flip;       // 背景テクスチャ上下反転
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -251,8 +303,8 @@ const fs = `
 
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    // 興奮するほど融合を弱める → 連打/フリックでバラけて飛沫になり、収まると再合体
-    float blendK = mix(0.40, 0.055, clamp(u_audioLevel * 0.22, 0.0, 1.0));
+    // 細かさ/興奮で融合を弱める → 連打でバラけて細かくなり、収まると再合体
+    float blendK = mix(0.40, 0.04, clamp(u_audioLevel * 0.18 + u_fine * 0.95, 0.0, 1.0));
     vec3 prevPos = u_directions[15];
 
     for (int i = 0; i < 16; i++){
@@ -260,7 +312,7 @@ const fs = `
       float m = u_masses[i];
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.40 + 0.2); // 興奮で遠くへ飛ぶ
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2);
       // 指で引いた向きへ body 全体が傾き、後ろの質点ほど尾を引く
       parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 15.0));
 
@@ -268,7 +320,7 @@ const fs = `
       parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
 
       float bounce = sin(u_time * 5.0 + float(i)) * 0.028 * (u_audioLevel + 0.5);
-      float pSize = 0.105 + (m * 0.05) + bounce;
+      float pSize = (0.105 + (m * 0.05) + bounce) * (1.0 - 0.5 * u_fine); // 細かいほど小さく
 
       float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.022 * u_audioLevel;
       float drop = length(p - parentPos) - (pSize + ripple);
@@ -276,6 +328,8 @@ const fs = `
       d = smin(d, drop, blendK);
       prevPos = currentDir;
     }
+    // 細かさ: 高周波で表面を刻んで霧化させる（連打でどんどん細かく）
+    d += sin(p.x * 24.0) * sin(p.y * 24.0) * sin(p.z * 24.0) * 0.013 * u_fine;
     return d;
   }
 
@@ -299,17 +353,21 @@ const fs = `
     return c;
   }
 
+  // 背景テクスチャ(ロゴ/文字)を screen uv で参照。p5の2Dグラフィックは上下反転しがちなので u_flip で補正
+  vec3 bgAt(vec2 uv){
+    uv = clamp(uv, 0.001, 0.999);
+    if (u_flip > 0.5) uv.y = 1.0 - uv.y;
+    return texture2D(u_bg, uv).rgb;
+  }
+
   void main(){
-    vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
+    vec2 uv  = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
+    vec2 suv = gl_FragCoord.xy / u_resolution.xy;   // 0..1 スクリーン座標
 
     vec3 ro = vec3(0.0, 0.0, 4.6);
     vec3 rd = normalize(vec3(uv, -2.2));
 
-    // 背景: ほぼ黒。上にわずかな持ち上げ + 強いビネット + 差し色のごく薄いヘイズ
-    float vert = gl_FragCoord.y / u_resolution.y;
-    vec3 bg = mix(vec3(0.015), vec3(0.085), vert);
-    bg *= 1.0 - 0.65 * length(uv * vec2(0.8, 0.72));
-    bg += u_accent * 0.02;
+    vec3 bg  = bgAt(suv);   // 背後のロゴ/タイポ（くっきり）
     vec3 col = bg;
 
     float nearest = 1e9;
@@ -321,59 +379,57 @@ const fs = `
       nearest = min(nearest, d);
       if (d < 0.0012){
         hit = true;
-        vec3 n = getNormal(p);
+        vec3 n  = getNormal(p);
         vec3 vd = -rd;
 
-        vec3 ld  = normalize(vec3(0.6, 1.0, 0.7));   // キーライト
-        vec3 ld2 = normalize(vec3(-0.7, -0.2, 0.4)); // フィル/バック
+        vec3 hlf  = normalize(normalize(vec3(0.6, 1.0, 0.7)) + vd);
+        float spec = pow(max(dot(n, hlf), 0.0), 120.0);     // 鋭いハイライト
+        float fres = pow(1.0 - max(dot(n, vd), 0.0), 3.0);  // フレネル(縁ほど反射)
 
-        float diff  = max(dot(n, ld), 0.0);
-        float diff2 = max(dot(n, ld2), 0.0);
+        // ガラスの屈折: 背後の文字がレンズ越しに歪む + 色収差(分光)
+        vec3 rdir = refract(rd, n, 0.66);
+        vec2 base = suv + rdir.xy * u_lens;
+        float dsp = u_disp * (0.4 + fres);
+        vec3 refr = vec3(
+          bgAt(base + vec2(dsp, 0.0)).r,
+          bgAt(base).g,
+          bgAt(base - vec2(dsp, 0.0)).b
+        );
+        refr *= u_glassTint;            // 黒い艶ガラスの吸収
 
-        vec3 hlf = normalize(ld + vd);
-        float spec = pow(max(dot(n, hlf), 0.0), 120.0);    // 鋭く小さいハイライト
-
-        float fres = pow(1.0 - max(dot(n, vd), 0.0), 3.0); // フレネル
-        float occ  = clamp(mapScene(p + n * 0.15) / 0.15, 0.0, 1.0);
-
-        // 反射に色収差(分散): チャンネルごとに反射ベクトルを少しずらす
-        float disp = 0.012 + fres * 0.06;
-        vec3 nr = normalize(n + vec3( disp,  disp * 0.3, 0.0));
-        vec3 nb = normalize(n + vec3(-disp, -disp * 0.3, 0.0));
+        // 反射: スタジオ照明の鋭い帯（色収差つき）
+        float ed = 0.012 + fres * 0.05;
+        vec3 nr = normalize(n + vec3( ed,  ed * 0.3, 0.0));
+        vec3 nb = normalize(n + vec3(-ed, -ed * 0.3, 0.0));
         vec3 envCol = vec3(
           env(reflect(rd, nr)).r,
           env(reflect(rd, n )).g,
           env(reflect(rd, nb)).b
         );
 
-        // 液体クローム(高コントラスト: 黒を入れる)
-        vec3 m = mix(vec3(0.03), vec3(0.85), smoothstep(0.0, 1.0, diff));
-        m += diff2 * 0.10;
-        m = mix(m, envCol, 0.50);                    // 鋭い映り込み
-        m += spec * 2.2;                             // 白飛びハイライト
-        m += fres * (0.25 + u_accent * (0.6 + u_audioLevel * 1.0)); // 差し色リム
-        m *= (0.5 + 0.5 * occ);                      // AO
+        vec3 glass = mix(refr, envCol, fres);                    // 中心=屈折, 縁=反射
+        glass += spec * 2.4;                                     // 白飛びハイライト
+        glass += fres * u_accent * (0.25 + u_audioLevel * 0.9);  // 差し色リム
 
         float fog = clamp(exp(-0.16 * (t - 3.0)), 0.0, 1.0);
-        col = mix(bg, m, fog);
+        col = mix(bg, glass, fog);
         break;
       }
       t += d;
       if (t > 11.0) break;
     }
 
-    // 疑似ブルーム: シルエットへの最接近距離からにじむ光(背景側に乗る)
+    // 疑似ブルーム: シルエットへにじむ光（背景の文字に乗る）
     if (!hit){
       float glow = exp(-nearest * 7.0);
-      col += (vec3(0.4) + u_accent * 1.4) * glow * (0.20 + u_audioLevel * 0.7);
+      col += (vec3(0.35) + u_accent * 1.4) * glow * (0.18 + u_audioLevel * 0.7);
     }
 
-    // 階調: S字コントラスト + 黒締め + ビネット + グレイン
+    // 階調: S字コントラスト + ビネット + グレイン
     col = clamp(col, 0.0, 1.0);
-    col = mix(col, smoothstep(0.0, 1.0, col), 0.55);  // コントラスト
-    col = max(col - 0.012, 0.0) * 1.04;               // 黒を締める
-    col *= 1.07 - length(uv) * 0.22;                  // ビネット
-    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.03; // フィルムグレイン
+    col = mix(col, smoothstep(0.0, 1.0, col), 0.45);
+    col *= 1.05 - length(uv) * 0.18;
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.025;
     gl_FragColor = vec4(col, 1.0);
   }
 `;
