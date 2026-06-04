@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hayashi Design Works — Hero</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#0b0b0b; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<script>
+/* =========================================================
+   Hayashi Design Works — Droplet Flow (新規制作 v1)
+   ---------------------------------------------------------
+   original.html の「雫の積層」を継承しつつ進化させた版:
+   ・Perlinノイズの流れ場で雫が有機的に渦巻く
+   ・マウスを動かさなくても自走する（ゆっくり生きている）
+   ・ごく薄いフェードで「呼吸する」蓄積に（ベタ塗りで潰れない）
+   ・ジョイスティック(Hue/Sat) と ■/▶ は踏襲
+   ========================================================= */
+
+/* ===== sizing ===== */
+function UISCALE(){ const s=min(windowWidth,windowHeight); return constrain(s/1200,0.6,1.0); }
+function GUTTER(){ const w=windowWidth; return w>=1280?28:(w>=900?24:20); }
+
+/* ===== state ===== */
+let isPaused=false;
+let hueVal=210, satVal=75;      // ジョイスティックで操作する色
+let t=0;                        // 時間（ノイズ用）
+let mouseIdle=0;                // マウスが止まっている時間
+let pmx=0, pmy=0;               // 直前のマウス位置
+let aim;                        // 雫がなびく方向（ゆっくり追従するベクトル）
+
+/* ===== layout ===== */
+let S=1, JOY_R=34, KNOB_R=6, HIT_PAD=10, joyPos={x:0,y:0};
+let BTN_SIZE=38, playBtn={x:0,y:0};
+
+function computeLayout(){
+  S=UISCALE(); const g=GUTTER();
+  JOY_R=Math.round(34*S);
+  KNOB_R=Math.round(6*S);
+  HIT_PAD=Math.round(10*S);
+  BTN_SIZE=Math.round(38*S);
+  joyPos.x=g+JOY_R; joyPos.y=g+JOY_R;
+  playBtn.x=g+BTN_SIZE/2; playBtn.y=height-g-BTN_SIZE/2;
+}
+
+/* ===== p5 ===== */
+function setup(){
+  createCanvas(windowWidth, windowHeight);
+  colorMode(HSB,360,100,100,100);
+  background(184,93,8,100);     // 深い青ベース
+  frameRate(60);
+  aim=createVector(0,0);
+  computeLayout();
+}
+function windowResized(){
+  resizeCanvas(windowWidth, windowHeight);
+  background(184,93,8,100);
+  computeLayout();
+}
+
+function draw(){
+  if(!isPaused){
+    breathe();      // ごく薄いフェードで蓄積を呼吸させる
+    updateAim();    // なびく方向を更新（マウス or 自走）
+    // 1フレームに数粒。密度と安定性のバランス
+    const n = (width*height > 1600*900) ? 3 : 2;
+    for(let i=0;i<n;i++) droplet();
+    t += 0.0035;
+  }
+  drawJoystick();
+  drawPlayStop();
+}
+
+/* ===== 蓄積を「呼吸」させる薄いフェード ===== */
+function breathe(){
+  // 背景色をごく薄く重ねることで、古い描画が静かに沈んでいく
+  noStroke();
+  fill(184, 93, 8, 1.4);
+  rect(0,0,width,height);
+}
+
+/* ===== なびく方向（aim）の更新 ===== */
+function updateAim(){
+  const moved = dist(mouseX,mouseY,pmx,pmy);
+  if(moved > 0.5 && mouseX>0 && mouseY>0){ mouseIdle=0; } else { mouseIdle++; }
+  pmx=mouseX; pmy=mouseY;
+
+  let target;
+  if(mouseIdle < 45 && mouseX>0 && mouseY>0){
+    // マウス操作中: マウス方向へなびく
+    target = createVector(mouseX - width/2, mouseY - height/2);
+  }else{
+    // 自走モード: ノイズでゆっくり回る大きなうねり
+    const a = noise(t*0.6, 99.9) * TWO_PI * 2;
+    const r = (0.18 + 0.12*noise(t*0.5, 11.1)) * height;
+    target = createVector(cos(a)*r, sin(a)*r);
+  }
+  // 急に変えず、なめらかに追従
+  aim.lerp(target, 0.04);
+}
+
+/* ===== 雫（円錐）— 流れ場でゆらぐ版 ===== */
+function droplet(){
+  const center = createVector(random(width), random(height));
+  const brightness = random(35,100);
+  const weight = random(12,44);     // 円の間隔
+  const d = random(height*0.18, height*0.5);
+
+  stroke(0, 0, 0, 70);
+  strokeWeight(random(1,3.5));
+
+  // この雫が属する流れ場の角度（場所＋時間で決まる渦）
+  const flow = noise(center.x*0.0012, center.y*0.0012, t) * TWO_PI * 2;
+  const swirl = 0.55 * d;           // 渦の効き具合
+
+  for(let x=0; x<height; x+=weight){
+    const k = map(x,0,height,0,1);
+    // aim（マウス/自走の大方向）＋ 流れ場の渦
+    const ox = aim.x*k + cos(flow)*swirl*k;
+    const oy = aim.y*k + sin(flow)*swirl*k;
+    // 距離で彩度をわずかに上げ、奥行きを出す
+    fill(hueVal, constrain(satVal + k*12, 0, 100), brightness);
+    circle(center.x + ox, center.y + oy, map(x,0,height,d,0));
+  }
+}
+
+/* ===== UI: joystick ===== */
+let draggingJoy=false;
+
+function drawJoystick(){
+  const x=joyPos.x, y=joyPos.y;
+  noFill(); stroke(0,0,100,35); strokeWeight(1.2);
+  circle(x,y,JOY_R*2);
+
+  const ang=map(hueVal,0,340,0,TWO_PI)-HALF_PI;
+  const rad=map(satVal,0,100,0,JOY_R);
+  const kx=x+cos(ang)*rad, ky=y+sin(ang)*rad;
+
+  push();
+    noStroke();
+    drawingContext.shadowBlur=6;
+    drawingContext.shadowColor='rgba(0,0,0,0.20)';
+    fill(hueVal, 90, 100, 95);
+    circle(kx,ky,KNOB_R*2);
+  pop();
+
+  if(draggingJoy){
+    noFill(); stroke(0,0,100,40); strokeWeight(1);
+    line(x,y,kx,ky);
+  }
+}
+
+function drawPlayStop(){
+  const x=playBtn.x, y=playBtn.y;
+  noFill(); stroke(0,0,100,60); strokeWeight(2);
+  circle(x,y,BTN_SIZE);
+  fill(0,0,100,95); noStroke();
+  if(!isPaused){
+    rectMode(CENTER);
+    rect(x,y,BTN_SIZE*0.32,BTN_SIZE*0.32,1.5); // ■
+  }else{
+    beginShape();                                   // ▶
+    vertex(x - BTN_SIZE*0.12, y - BTN_SIZE*0.20);
+    vertex(x + BTN_SIZE*0.18, y);
+    vertex(x - BTN_SIZE*0.12, y + BTN_SIZE*0.20);
+    endShape(CLOSE);
+  }
+}
+
+/* ===== interaction ===== */
+function mousePressed(){
+  if(dist(mouseX,mouseY,playBtn.x,playBtn.y)<BTN_SIZE/2){
+    isPaused=!isPaused; return;
+  }
+  if(dist(mouseX,mouseY,joyPos.x,joyPos.y)<=JOY_R+HIT_PAD){
+    draggingJoy=true; updateFromPointer(mouseX,mouseY,false);
+  }
+}
+function mouseDragged(){ if(!draggingJoy) return; updateFromPointer(mouseX,mouseY,keyIsDown(SHIFT)); }
+function mouseReleased(){ draggingJoy=false; }
+
+function updateFromPointer(mx,my,fine){
+  const sens=fine?1/3:1;
+  const dx=(mx-joyPos.x)*sens, dy=(my-joyPos.y)*sens;
+  let a=atan2(dy,dx)+HALF_PI; if(a<0)a+=TWO_PI;
+  let r=sqrt(dx*dx+dy*dy); r=constrain(r,0,JOY_R);
+  hueVal=map(a,0,TWO_PI,0,340);
+  satVal=map(r,0,JOY_R,0,100);
+}
+</script>
+</body>
+</html>
