@@ -48,6 +48,7 @@ const CONFIG = {
   glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
   planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
   logoWorld:  0.58,  // ロゴ平面のworld半径(高さ)。大きいほどロゴが大きく映る
+  absorb:     1.15,  // ガラスの吸収(体積感)。大きいほど厚い所が暗くなる
   dispersion: 0.012, // 色収差(分光)。縁だけ薄く＝上品に
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
@@ -242,6 +243,7 @@ function draw(){
   myShader.setUniform('u_planeZ', CONFIG.planeZ);
   myShader.setUniform('u_logoHalfH', CONFIG.logoWorld);
   myShader.setUniform('u_logoHalfW', CONFIG.logoWorld * logoAspect);
+  myShader.setUniform('u_absorb', CONFIG.absorb);
   myShader.setUniform('u_disp', CONFIG.dispersion);
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
@@ -329,6 +331,7 @@ const fs = `
   uniform float u_planeZ;     // ロゴ平面の奥行き
   uniform float u_logoHalfW;  // ロゴ平面の半幅(world)
   uniform float u_logoHalfH;  // ロゴ平面の半高(world)
+  uniform float u_absorb;     // ガラスの吸収係数(体積感)
   uniform float u_disp;       // 色収差の強さ
   uniform float u_flip;       // 背景テクスチャ上下反転
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
@@ -336,6 +339,11 @@ const fs = `
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+  // フィルミック・トーンマップ(ACES近似): 白飛びを上品にロールオフ
+  vec3 aces(vec3 x){
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+  }
 
   vec3 rotate(vec3 p, vec2 r){
     float s = sin(r.x), c = cos(r.x);
@@ -403,12 +411,14 @@ const fs = `
 
   // 擬似環境(スタジオ): ほぼ暗く、明るいソフトボックスの帯だけが鋭く映り込む = 締まったクローム
   vec3 env(vec3 r){
-    float y = r.y * 0.5 + 0.5;
-    float top = smoothstep(0.58, 0.70, y) * (1.0 - smoothstep(0.88, 1.0, y));
-    float low = smoothstep(0.14, 0.22, y) * (1.0 - smoothstep(0.30, 0.42, y));
-    vec3 c = vec3(0.025);
-    c += vec3(1.25) * top;    // 上のソフトボックス(控えめ)
-    c += vec3(0.35) * low;    // 下の弱い帯
+    vec3 rn = normalize(r);
+    float y = rn.y * 0.5 + 0.5;
+    vec3 grad = mix(vec3(0.012), vec3(0.16), smoothstep(0.0, 1.0, y));            // 床→天井
+    float key  = pow(max(dot(rn, normalize(vec3( 0.35, 0.80, 0.50))), 0.0), 6.0); // 主光(やわらかい)
+    float fill = pow(max(dot(rn, normalize(vec3(-0.55, 0.10, 0.60))), 0.0), 10.0);// 補助光(冷)
+    vec3 c = grad;
+    c += vec3(1.5) * key;
+    c += vec3(0.16, 0.20, 0.30) * fill;
     return c;
   }
 
@@ -438,10 +448,14 @@ const fs = `
     vec3 ro = vec3(0.0, 0.0, 4.6);
     vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
 
-    // 背景に素のロゴは出さない。ロゴは「液体を通したときだけ」見える(下のbgAtは屈折にのみ使用)
-    // 暗い紙色 + 微かに動く冷たい揺らぎ
-    vec3 bg = vec3(0.047);
-    bg += vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + suv.x * 2.5 - suv.y * 2.0));
+    // 背景: 休止時は暗い。飛び散る(fine)ほど"実像(歪まないロゴ)"が現れる
+    vec3 paper = vec3(0.047);
+    paper += vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + suv.x * 2.5 - suv.y * 2.0));
+    float tp0 = (u_planeZ - ro.z) / min(rd.z, -0.001);
+    vec3 q0 = ro + rd * tp0;
+    vec2 luv0 = vec2(q0.x / (2.0 * u_logoHalfW), q0.y / (2.0 * u_logoHalfH)) + 0.5;
+    vec3 realLogo = bgAt(luv0);
+    vec3 bg = mix(paper, max(paper, realLogo), smoothstep(0.25, 0.95, u_fine));
     vec3 col = bg;
 
     float nearest = 1e9;
@@ -472,6 +486,15 @@ const fs = `
           bgAt(luv - vec2(dsp, 0.0)).b
         );
         refr *= u_glassTint;
+        // 厚み計測 → Beer-Lambert吸収（厚い所ほど暗い＝体積感/C4D的なガラス）
+        float thick = 0.0;
+        vec3 ip = p + rdir * 0.02;
+        for (int k = 0; k < 20; k++){
+          if (mapScene(ip) > 0.0) break;
+          ip += rdir * 0.045;
+          thick += 0.045;
+        }
+        refr *= exp(-thick * u_absorb * vec3(0.85, 0.95, 1.1)); // 奥はわずかに寒色
 
         // 反射: 控えめな映り込み（分光なし）
         vec3 envCol = env(reflect(rd, n));
@@ -491,11 +514,10 @@ const fs = `
 
     // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
 
-    // 階調: S字コントラスト + ビネット + グレイン
-    col = clamp(col, 0.0, 1.0);
-    col = mix(col, smoothstep(0.0, 1.0, col), 0.45);
+    // 階調: フィルミック(ACES) + ビネット + グレイン
+    col = aces(col * 1.06);
     col *= 1.05 - length(uv) * 0.18;
-    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.025;
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.022;
     gl_FragColor = vec4(col, 1.0);
   }
 `;
