@@ -113,6 +113,20 @@ function buildBgTex(){
   g.pixelDensity(1);
   g.background(CONFIG.bgPaper);
   g.noStroke();
+  // 背景を埋める淡いタイポ（寂しさ対策・参照ポスター的）
+  g.fill(CONFIG.bgInk * 0.14);
+  g.textFont('Helvetica');
+  g.textStyle(BOLD);
+  g.textAlign(LEFT, TOP);
+  {
+    const sz = g.height * 0.17;
+    g.textSize(sz);
+    let yy = g.height * 0.05;
+    for (let i = 0; i < CONFIG.bgLines.length; i++){
+      g.text(CONFIG.bgLines[i], g.width * 0.05, yy);
+      yy += sz * 0.92;
+    }
+  }
   if (logoImg){
     // ロゴ画像を中央に（液体がこれを屈折させる）
     const s = min(g.width, g.height) * CONFIG.logoSize;
@@ -225,8 +239,8 @@ function draw(){
   vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
   // 指の引き（尾）— なぞっている間だけ立ち上がり、離すと戻る
-  pullX += (tpullX - pullX) * 0.25; tpullX *= 0.82;
-  pullY += (tpullY - pullY) * 0.25; tpullY *= 0.82;
+  pullX += (tpullX - pullX) * 0.25; tpullX *= 0.88;  // 尾が少し長く残る
+  pullY += (tpullY - pullY) * 0.25; tpullY *= 0.88;
   for (let i = 0; i < currentDirs.length; i++){
     currentDirs[i] += (targetDirs[i] - currentDirs[i]) * 0.05;
   }
@@ -299,17 +313,17 @@ function poke(px, py){
 function dragRotate(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
   const sp = mag(dx, dy);
-  // body は指へ寄り（バネで遅れて追う）、引いた向きへ尾を引き、速いと表面が波立つ
+  // スワイプ＝液体を指の方向へ"引き伸ばす"(長い尾を引く smear)。回転は控えめ
   tmx = map(mouseX, 0, width, -1.0, 1.0);
   tmy = map(mouseY, 0, height, 1.0, -1.0);
-  if (sp > 3){
-    tpullX = constrain(dx *  0.020, -1.0, 1.0);
-    tpullY = constrain(dy * -0.020, -1.0, 1.0);
-    targetAudioLevel = max(targetAudioLevel, min(sp * 0.045, 2.4));
+  if (sp > 2){
+    tpullX = constrain(dx *  0.032, -1.2, 1.2);
+    tpullY = constrain(dy * -0.032, -1.2, 1.2);
+    targetAudioLevel = max(targetAudioLevel, min(sp * 0.03, 1.6));
   }
-  if (abs(dx) >= abs(dy)){            // 横移動が主のときだけ回転（縦=スクロール優先）
-    targetRotationY += dx * 0.01;
-    targetRotationX += dy * 0.01;
+  if (abs(dx) >= abs(dy)){            // 横移動が主のときだけ回転（控えめ・縦=スクロール優先）
+    targetRotationY += dx * 0.004;
+    targetRotationX += dy * 0.004;
   }
   lastInteract = millis();
 }
@@ -379,7 +393,7 @@ const fs = `
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
       // 細かいほど外へ広がって飛び散る
       vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2 + u_fine * 0.6);
-      parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 21.0));
+      parentPos.xy -= u_pull * (0.12 + 0.95 * (float(i) / 21.0)); // 後ろの質点ほど長く尾を引く
 
       float t = u_time * (2.0 + m) + float(i) * 1.5;
       parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
@@ -394,7 +408,7 @@ const fs = `
       prevPos = currentDir;
     }
     // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
-    d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.011 * u_fine;
+    d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.007 * u_fine;
     return d;
   }
 
@@ -445,6 +459,8 @@ const fs = `
     vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
 
     vec3 bg  = bgAt(suv);   // 背後のロゴ/タイポ（くっきり）
+    // 背景に微かに動く冷たい揺らぎ（真っ黒の寂しさ対策）
+    bg += vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + suv.x * 2.5 - suv.y * 2.0));
     vec3 col = bg;
 
     float nearest = 1e9;
@@ -477,9 +493,10 @@ const fs = `
         // 反射: 控えめな映り込み（分光なし）
         vec3 envCol = env(reflect(rd, n));
 
-        vec3 glass = mix(refr, envCol, fres * 0.65);             // 縁にだけ上品な反射
-        glass += spec * 1.4;                                     // ハイライト
-        glass += fres * (vec3(0.10) + u_accent * 0.08);          // 縁はほぼ白＋ごく僅かな差し色
+        vec3 glass = mix(refr, envCol, fres * 0.6);
+        glass += spec * 1.6;                          // ハイライト
+        glass += pow(fres, 1.5) * vec3(0.55);         // 水滴らしい明るい細リム(白)
+        glass += fres * u_accent * 0.06;              // ごく僅かな差し色
 
         float fog = clamp(exp(-0.16 * (t - 3.0)), 0.0, 1.0);
         col = mix(bg, glass, fog);
@@ -489,11 +506,7 @@ const fs = `
       if (t > 11.0) break;
     }
 
-    // 疑似ブルーム: シルエットへごく控えめに滲む光
-    if (!hit){
-      float glow = exp(-nearest * 9.0);
-      col += (vec3(0.20) + u_accent * 0.40) * glow * (0.10 + u_audioLevel * 0.5);
-    }
+    // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
 
     // 階調: S字コントラスト + ビネット + グレイン
     col = clamp(col, 0.0, 1.0);
