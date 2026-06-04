@@ -47,9 +47,9 @@ const CONFIG = {
   // ガラスの質感
   glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
   planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
-  logoWorld:  0.58,  // ロゴ平面のworld半径(高さ)。大きいほどロゴが大きく映る
+  logoWorld:  0.40,  // ロゴ平面のworld半径。コアより小さく＝液体が全面を覆える
   absorb:     1.15,  // ガラスの吸収(体積感)。大きいほど厚い所が暗くなる
-  dispersion: 0.012, // 色収差(分光)。縁だけ薄く＝上品に
+  dispersion: 0.020, // 色収差(分光/プリズム)。C4D的な歪みの色割れ
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
   formScale:  1.0,   // 全体倍率の手動調整
@@ -57,7 +57,7 @@ const CONFIG = {
   logoUrl:    LOGO_URI,   // ロゴをHTMLに焼き込み（外部ファイル不要・どこでも動く）
   logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
-  coreSize:   0.50,          // 中央コアの半径（休止時にロゴを覆う大玉。大きいほど覆う）
+  coreSize:   0.55,          // 中央コアの半径（休止時にロゴを覆う大玉。logoWorldより大きく）
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -162,7 +162,7 @@ function setup(){
     const v = p5.Vector.random3D().mult(1.0);
     currentDirs.push(v.x, v.y, v.z);
     targetDirs.push(v.x, v.y, v.z);
-    masses.push(random(0.5, 2.0));
+    masses.push(random(0.2, 2.2));
   }
 }
 function windowResized(){
@@ -198,8 +198,8 @@ function draw(){
     targetRotationY += 0.0014;
     const breath = 0.50 + 0.32 * sin(now * 0.0011);
     if (targetAudioLevel < breath) targetAudioLevel = breath;
-    tmx = sin(now * 0.00028) * 0.12;   // ロゴを覆い続けるよう動きは控えめ
-    tmy = cos(now * 0.00037) * 0.10;
+    tmx = sin(now * 0.00028) * 0.05;   // ロゴを覆い続けるよう動きは控えめ
+    tmy = cos(now * 0.00037) * 0.045;
     if (frameCount % 220 === 0) pulse(1.7, 1.6, 2.8);
   }
 
@@ -217,7 +217,7 @@ function draw(){
   }
   targetAudioLevel *= 0.95;
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
-  fine *= 0.992;   // 細かさはゆっくり戻る（散ってる間は実像が見え続ける）
+  fine *= 0.996;   // 細かさはゆっくり戻る（飛散がしばらく滞留＝戻りが遅い）
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
   scrollProg += (scrollTarget - scrollProg) * 0.08;
@@ -376,7 +376,7 @@ const fs = `
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
       // 細かいほど外へ広がって飛び散る
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2 + u_fine * 0.6);
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2 + u_fine * 1.15);
       parentPos.xy -= u_pull * (0.12 + 0.95 * (float(i) / 21.0)); // 後ろの質点ほど長く尾を引く
       // 重力: 散らばってるほど(audio/fine)下へ沈む。重い粒ほど落ちる
       parentPos.y -= (u_audioLevel * 0.10 + u_fine * 0.38) * (0.4 + m * 0.5);
@@ -385,7 +385,7 @@ const fs = `
       parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
 
       float bounce = sin(u_time * 5.0 + float(i)) * 0.028 * (u_audioLevel + 0.5);
-      float pSize = (0.06 + (m * 0.06) + bounce) * (1.0 - 0.7 * u_fine); // サイズ差を広げる
+      float pSize = (0.025 + (m * 0.075) + bounce) * (1.0 - 0.6 * u_fine); // 大小差を強く(小はとことん小)
 
       // 速度＋重力方向へ伸びる"しずく形"（無重力の球を脱却）
       float stretchK = clamp(u_audioLevel * 0.16 + u_fine * 0.34, 0.0, 0.5);
@@ -457,14 +457,13 @@ const fs = `
     vec3 ro = vec3(0.0, 0.0, 4.6);
     vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
 
-    // 背景: 休止時は暗い。飛び散る(fine)ほど"実像(歪まないロゴ)"が現れる
+    // 実像は常に背後にある。休止時は液体が全面を覆うので見えず、飛び散って液体が無くなると見える
     vec3 paper = vec3(0.047);
     paper += vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + suv.x * 2.5 - suv.y * 2.0));
     float tp0 = (u_planeZ - ro.z) / min(rd.z, -0.001);
     vec3 q0 = ro + rd * tp0;
     vec2 luv0 = vec2(q0.x / (2.0 * u_logoHalfW), q0.y / (2.0 * u_logoHalfH)) + 0.5;
-    vec3 realLogo = bgAt(luv0);
-    vec3 bg = mix(paper, max(paper, realLogo), smoothstep(0.12, 0.7, u_fine));
+    vec3 bg = max(paper, bgAt(luv0));
     vec3 col = bg;
 
     float nearest = 1e9;
@@ -488,7 +487,7 @@ const fs = `
         float tp = (u_planeZ - p.z) / min(rdir.z, -0.001);
         vec3 q = p + rdir * tp;
         vec2 luv = vec2(q.x / (2.0 * u_logoHalfW), q.y / (2.0 * u_logoHalfH)) + 0.5;
-        float dsp = u_disp * fres;       // 分光は縁(fres)だけ＝上品
+        float dsp = u_disp * (0.3 + fres); // プリズム的な分光（全体に薄く＋縁で強く）= C4D的
         vec3 refr = vec3(
           bgAt(luv + vec2(dsp, 0.0)).r,
           bgAt(luv).g,
