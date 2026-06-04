@@ -47,12 +47,18 @@ const CONFIG = {
   lens:       0.22,  // 屈折で背景がズレる量(レンズの強さ)
   dispersion: 0.05,  // 色収差(分光)の強さ
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
+  // 液体のサイズ（画面サイズで可変）
+  formScale:  1.0,   // 全体倍率の手動調整
+  // 屈折させる対象（ロゴ画像）。空ならテキスト(bgLines)で代用
+  logoUrl:    '',    // 例: './logo.png' （透過PNG推奨）
+  logoSize:   0.42,  // 画面短辺に対するロゴの大きさ
 };
 
-let myShader, cnv, bgTex;
+let myShader, cnv, bgTex, logoImg;
 let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
 let fpsAvg = 60, adjustCool = 0;
 let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
+let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
 let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
@@ -97,22 +103,45 @@ function buildBgTex(){
   g.pixelDensity(1);
   g.background(CONFIG.bgPaper);
   g.noStroke();
-  g.fill(CONFIG.bgInk);
-  g.textFont('Helvetica');
-  g.textStyle(BOLD);
-  g.textAlign(LEFT, TOP);
-  const mgn = g.width * 0.06;
-  const size = g.height * 0.155;
-  g.textSize(size);
-  let y = g.height * 0.07;
-  for (let i = 0; i < CONFIG.bgLines.length; i++){
-    g.text(CONFIG.bgLines[i], mgn, y);
-    y += size * 0.92;
+  if (logoImg){
+    // ロゴ画像を中央に（液体がこれを屈折させる）
+    const s = min(g.width, g.height) * CONFIG.logoSize;
+    const r = logoImg.width / logoImg.height;
+    let w2 = s, h2 = s / r;
+    if (r < 1){ h2 = s; w2 = s * r; }
+    g.imageMode(CENTER);
+    g.image(logoImg, g.width / 2, g.height / 2, w2, h2);
+  } else {
+    // フォールバック: テキストを描く
+    g.fill(CONFIG.bgInk);
+    g.textFont('Helvetica');
+    g.textStyle(BOLD);
+    g.textAlign(LEFT, TOP);
+    const mgn = g.width * 0.06;
+    const size = g.height * 0.155;
+    g.textSize(size);
+    let y = g.height * 0.07;
+    for (let i = 0; i < CONFIG.bgLines.length; i++){
+      g.text(CONFIG.bgLines[i], mgn, y);
+      y += size * 0.92;
+    }
+    g.textStyle(NORMAL);
+    g.textSize(max(10, g.height * 0.016));
+    g.text(CONFIG.bgFoot, mgn, g.height * 0.95);
   }
-  g.textStyle(NORMAL);
-  g.textSize(max(10, g.height * 0.016));
-  g.text(CONFIG.bgFoot, mgn, g.height * 0.95);
   bgTex = g;
+}
+
+function preload(){
+  if (CONFIG.logoUrl){
+    logoImg = loadImage(CONFIG.logoUrl, () => {}, () => { logoImg = null; });
+  }
+}
+
+/* 液体の倍率: 画面が大きいほど少し大きく */
+function formScaleFactor(){
+  const s = constrain(map(min(windowWidth, windowHeight), 380, 1200, 0.9, 1.45), 0.9, 1.6);
+  return s * CONFIG.formScale;
 }
 
 function setup(){
@@ -202,6 +231,7 @@ function draw(){
   myShader.setUniform('u_lens', CONFIG.lens);
   myShader.setUniform('u_disp', CONFIG.dispersion);
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
+  myShader.setUniform('u_scale', formScaleFactor());
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -229,9 +259,14 @@ function pulse(audio, lo, hi){
 function poke(px, py){
   tmx = map(px, 0, width, -1.0, 1.0);
   tmy = map(py, 0, height, 1.0, -1.0);
-  fine = min(1.0, fine + 0.24);   // 連打でどんどん細かく霧化
-  pulse(3.5, 1.0, 2.2);           // 飛び回りは控えめ（細かさで魅せる）
-  lastInteract = millis();
+  // タップの「強さ」は取れないので、連打の「速さ(間隔)」でバラけ方を決める
+  const now = millis();
+  const dt = now - lastTap;
+  lastTap = now;
+  const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど1.0
+  fine = min(1.0, fine + 0.08 + rapid * 0.34);                     // 速いほど一気に細かく
+  pulse(2.0 + rapid * 3.5, 0.8, 1.4 + rapid * 1.8);                // 速いほど激しく弾ける
+  lastInteract = now;
 }
 function dragRotate(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
@@ -279,6 +314,7 @@ const fs = `
   uniform float u_lens;       // 屈折の強さ
   uniform float u_disp;       // 色収差の強さ
   uniform float u_flip;       // 背景テクスチャ上下反転
+  uniform float u_scale;      // 液体の倍率(画面サイズ可変)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -365,7 +401,7 @@ const fs = `
     vec2 suv = gl_FragCoord.xy / u_resolution.xy;   // 0..1 スクリーン座標
 
     vec3 ro = vec3(0.0, 0.0, 4.6);
-    vec3 rd = normalize(vec3(uv, -2.2));
+    vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
 
     vec3 bg  = bgAt(suv);   // 背後のロゴ/タイポ（くっきり）
     vec3 col = bg;
