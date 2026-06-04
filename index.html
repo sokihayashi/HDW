@@ -48,7 +48,7 @@ const CONFIG = {
   glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
   planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
   logoWorld:  0.40,  // ロゴ平面のworld半径。コアより小さく＝液体が全面を覆える
-  absorb:     1.15,  // ガラスの吸収(体積感)。大きいほど厚い所が暗くなる
+  absorb:     0.85,  // ガラスの吸収(体積感)。大きいほど厚い所が暗くなる
   dispersion: 0.020, // 色収差(分光/プリズム)。C4D的な歪みの色割れ
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
@@ -57,7 +57,7 @@ const CONFIG = {
   logoUrl:    LOGO_URI,   // ロゴをHTMLに焼き込み（外部ファイル不要・どこでも動く）
   logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
-  coreSize:   0.55,          // 中央コアの半径（休止時にロゴを覆う大玉。logoWorldより大きく）
+  coreSize:   0.62,          // 中央コアの半径（休止時にロゴを覆う大玉。logoWorldより大きく）
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -75,7 +75,7 @@ let vmx = 0, vmy = 0;                                 // 速度(液体の慣性/
 let pullX = 0, pullY = 0, tpullX = 0, tpullY = 0;     // 指で引いている向き
 let lastInteract = -99999;
 
-let numDrops = 22;
+let numDrops = 28;
 let currentDirs = [], targetDirs = [], masses = [];
 
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
@@ -321,8 +321,8 @@ const fs = `
   uniform vec2  u_mouse;
   uniform float u_audioLevel;
   uniform vec2  u_rotation;
-  uniform vec3  u_directions[22];
-  uniform float u_masses[22];
+  uniform vec3  u_directions[28];
+  uniform float u_masses[28];
   uniform vec3  u_accent;
   uniform vec2  u_pull;       // 指で引いている向き(尾を引く/body を引っ張る)
   uniform float u_fine;       // 細かさ(連打で増える)
@@ -368,16 +368,16 @@ const fs = `
     float d = 1e10;
     // 細かさ/興奮で融合を弱める → 連打でバラけて極小の飛沫へ
     float blendK = mix(0.38, 0.03, clamp(u_audioLevel * 0.18 + u_fine * 1.0, 0.0, 1.0));
-    vec3 prevPos = u_directions[21];
+    vec3 prevPos = u_directions[27];
 
-    for (int i = 0; i < 22; i++){
+    for (int i = 0; i < 28; i++){
       vec3 currentDir = u_directions[i];
       float m = u_masses[i];
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
       // 細かいほど外へ広がって飛び散る
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2 + u_fine * 1.15);
-      parentPos.xy -= u_pull * (0.12 + 0.95 * (float(i) / 21.0)); // 後ろの質点ほど長く尾を引く
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.30 + u_fine * 1.15);
+      parentPos.xy -= u_pull * (0.12 + 0.95 * (float(i) / 27.0)); // 後ろの質点ほど長く尾を引く
       // 重力: 散らばってるほど(audio/fine)下へ沈む。重い粒ほど落ちる
       parentPos.y -= (u_audioLevel * 0.10 + u_fine * 0.38) * (0.4 + m * 0.5);
 
@@ -494,15 +494,15 @@ const fs = `
           bgAt(luv - vec2(dsp, 0.0)).b
         );
         refr *= u_glassTint;
-        // 厚み計測 → Beer-Lambert吸収（厚い所ほど暗い＝体積感/C4D的なガラス）
+        // 厚み計測 → Beer-Lambert吸収（厚い所ほど暗い＝体積感）。色はニュートラル(茶濁り防止)
         float thick = 0.0;
         vec3 ip = p + rdir * 0.02;
-        for (int k = 0; k < 20; k++){
+        for (int k = 0; k < 14; k++){
           if (mapScene(ip) > 0.0) break;
-          ip += rdir * 0.045;
-          thick += 0.045;
+          ip += rdir * 0.06;
+          thick += 0.06;
         }
-        refr *= exp(-thick * u_absorb * vec3(0.85, 0.95, 1.1)); // 奥はわずかに寒色
+        refr *= exp(-thick * u_absorb * vec3(1.02, 1.0, 0.97)); // ほぼ無彩色＋ごく僅か寒色
 
         // 反射: 控えめな映り込み（分光なし）
         vec3 envCol = env(reflect(rd, n));
@@ -512,8 +512,7 @@ const fs = `
         glass += pow(fres, 1.5) * vec3(0.55);         // 水滴らしい明るい細リム(白)
         glass += fres * u_accent * 0.06;              // ごく僅かな差し色
 
-        float fog = clamp(exp(-0.16 * (t - 3.0)), 0.0, 1.0);
-        col = mix(bg, glass, fog);
+        col = glass;   // ガラスは背景(実像)を通さない。自分の屈折(歪み像)だけを映す
         break;
       }
       t += d;
