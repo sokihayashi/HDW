@@ -45,10 +45,10 @@ const CONFIG = {
   bgInk:   238,    // 文字色 (0-255 グレースケール)
   bgPaper: 12,     // 背景色
   // ガラスの質感
-  glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
+  glassTint:  0.92,  // 透け具合。上げてロゴを明るく(通常時の暗さ対策)
   planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
   logoWorld:  0.40,  // ロゴ平面のworld半径。コアより小さく＝液体が全面を覆える
-  absorb:     0.85,  // ガラスの吸収(体積感)。大きいほど厚い所が暗くなる
+  absorb:     0.50,  // ガラスの吸収(体積感)。下げて暗くなりすぎないように
   dispersion: 0.020, // 色収差(分光/プリズム)。C4D的な歪みの色割れ
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
@@ -422,11 +422,13 @@ const fs = `
   vec3 env(vec3 r){
     vec3 rn = normalize(r);
     float y = rn.y * 0.5 + 0.5;
-    vec3 grad = mix(vec3(0.012), vec3(0.16), smoothstep(0.0, 1.0, y));            // 床→天井
+    vec3 grad = mix(vec3(0.02), vec3(0.22), smoothstep(0.0, 1.0, y));             // 床→天井
     float key  = pow(max(dot(rn, normalize(vec3( 0.35, 0.80, 0.50))), 0.0), 6.0); // 主光(やわらかい)
+    float key2 = pow(max(dot(rn, normalize(vec3(-0.25, 0.55, 0.80))), 0.0), 16.0);// 第2の鋭い光
     float fill = pow(max(dot(rn, normalize(vec3(-0.55, 0.10, 0.60))), 0.0), 10.0);// 補助光(冷)
     vec3 c = grad;
-    c += vec3(1.5) * key;
+    c += vec3(1.6) * key;
+    c += vec3(1.1) * key2;
     c += vec3(0.16, 0.20, 0.30) * fill;
     return c;
   }
@@ -476,6 +478,12 @@ const fs = `
       if (d < 0.0012){
         hit = true;
         vec3 n  = getNormal(p);
+        // 水面のような微細なゆらぎ → 反射がきらめく(生き生き＆リアル)。ロゴも僅かに揺らぐ
+        n = normalize(n + 0.045 * vec3(
+          sin(p.y * 20.0 + u_time * 1.4),
+          sin(p.z * 20.0 + u_time * 1.1),
+          sin(p.x * 20.0 + u_time * 1.7)
+        ));
         vec3 vd = -rd;
 
         vec3 hlf  = normalize(normalize(vec3(0.5, 0.9, 0.8)) + vd);
@@ -507,7 +515,7 @@ const fs = `
         // 反射: 控えめな映り込み（分光なし）
         vec3 envCol = env(reflect(rd, n));
 
-        vec3 glass = mix(refr, envCol, fres * 0.6);
+        vec3 glass = mix(refr, envCol, 0.1 + fres * 0.6);  // 全体に薄く＋縁で強く反射＝艶
         glass += spec * 1.6;                          // ハイライト
         glass += pow(fres, 1.5) * vec3(0.55);         // 水滴らしい明るい細リム(白)
         glass += fres * u_accent * 0.06;              // ごく僅かな差し色
