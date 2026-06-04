@@ -57,35 +57,29 @@ const CONFIG = {
   logoUrl:    LOGO_URI,   // ロゴをHTMLに焼き込み（外部ファイル不要・どこでも動く）
   logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
-  coreSize:   0.62,          // 中央コアの半径（休止時にロゴを覆う大玉。logoWorldより大きく）
-  cutWidth:   0.17,          // スワイプで切る時の切れ目の最大幅
+  coreSize:   0.52,          // 中央コアの半径（休止時にロゴを覆う。粒がこの周りに凹凸を作る）
 };
 
 let myShader, cnv, bgTex, logoImg;
 let sceneG, postShader;              // 2パス: シーンをsceneGに描き、postで水滴合成
 let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
 let fpsAvg = 60, adjustCool = 0;
-let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
 let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
 let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロール連動(postMessage)
-const MAXDROPS = 30;                 // 前面ガラスの水滴
-let drops = [];                      // {x,y,r,life,vy}
+const MAXDROPS = 40;                 // 前面ガラスの水滴(小さく下に流れる)
+let drops = [];                      // {x,y,r,vy}
 let dropBuf = new Float32Array(MAXDROPS * 4);
-const MAXCUTS = 6;                   // スワイプの切れ目(複数本)
-let cuts = [];                       // {nx,ny,amt}
-let cutBuf = new Float32Array(MAXCUTS * 3);
 let lastCutTime = -9999;
 let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
 
-let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
-let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
-let mx = 0, my = 0, tmx = 0, tmy = 0;                 // 生命体が向かう先(-1..1)
-let vmx = 0, vmy = 0;                                 // 速度(液体の慣性/揺り戻し)
-let pullX = 0, pullY = 0, tpullX = 0, tpullY = 0;     // 指で引いている向き
+let mx = 0, my = 0, tmx = 0, tmy = 0;                 // 液体の中心(指追従)
+let vmx = 0, vmy = 0;                                 // 中心の慣性
 let lastInteract = -99999;
 
+// ===== 粒子シミュレーション(液体の物理) =====
 let numDrops = 28;
-let currentDirs = [], targetDirs = [], masses = [];
+let pos, vel, home, masses;          // 位置(中心からのオフセット)/速度/定位置/質量
+let agit = 0;                        // 興奮度0..1(運動エネルギー由来)
 
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
 function deviceCaps(){
@@ -173,11 +167,15 @@ function setup(){
       lastScrollMsg = millis();
     }
   });
+  pos = new Float32Array(numDrops * 3);
+  vel = new Float32Array(numDrops * 3);
+  home = new Float32Array(numDrops * 3);
+  masses = [];
   for (let i = 0; i < numDrops; i++){
-    const v = p5.Vector.random3D().mult(1.0);
-    currentDirs.push(v.x, v.y, v.z);
-    targetDirs.push(v.x, v.y, v.z);
-    masses.push(random(0.2, 2.2));
+    const v = p5.Vector.random3D().mult(random(0.22, 0.58)); // 定位置=コア表面付近(凹凸を作る)
+    home[i*3] = v.x; home[i*3+1] = v.y; home[i*3+2] = v.z;
+    pos[i*3]  = v.x; pos[i*3+1]  = v.y; pos[i*3+2]  = v.z;
+    masses.push(random(0.3, 1.8));
   }
 }
 function windowResized(){
@@ -207,32 +205,14 @@ function draw(){
   const now = millis();
   const idle = (now - lastInteract) > 2200;
   if (idle){
-    // 無操作時: ゆったり荘厳に自転・呼吸し、たまに大きく伸び上がる
-    targetRotationY += 0.0014;
-    const breath = 0.50 + 0.32 * sin(now * 0.0011);
-    if (targetAudioLevel < breath) targetAudioLevel = breath;
-    tmx = sin(now * 0.00028) * 0.05;   // ロゴを覆い続けるよう動きは控えめ
+    tmx = sin(now * 0.00028) * 0.05;   // ゆるい漂い(ロゴは覆ったまま)
     tmy = cos(now * 0.00037) * 0.045;
-    if (frameCount % 220 === 0) pulse(1.7, 1.6, 2.8);
   }
-
-  // なめらかな追従（粘性のある動き）
-  rotationX += (targetRotationX - rotationX) * 0.08;
-  rotationY += (targetRotationY - rotationY) * 0.08;
-  // バネ＋減衰で「行き過ぎて揺り戻す」液体の慣性に（フリックすると body がスロッシュ）
+  // 中心の指追従(バネ+減衰)
   vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
-  // 指の引き（尾）— なぞっている間だけ立ち上がり、離すと戻る
-  pullX += (tpullX - pullX) * 0.25; tpullX *= 0.88;  // 尾が少し長く残る
-  pullY += (tpullY - pullY) * 0.25; tpullY *= 0.88;
-  for (let i = 0; i < currentDirs.length; i++){
-    currentDirs[i] += (targetDirs[i] - currentDirs[i]) * 0.05;
-  }
-  targetAudioLevel *= 0.95;
-  currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
-  fine *= 0.996;   // 細かさはゆっくり戻る（飛散がしばらく滞留＝戻りが遅い）
+  stepSim();        // 粒子の物理(凝集=表面張力 / 重力 / 減衰)
   updateDrops();
-  updateCuts();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
   scrollProg += (scrollTarget - scrollProg) * 0.08;
@@ -248,13 +228,11 @@ function draw(){
   myShader.setUniform('u_resolution', [float(width), float(height)]);
   myShader.setUniform('u_time', now / 1000.0);
   myShader.setUniform('u_mouse', [mx, my]);
-  myShader.setUniform('u_audioLevel', currentAudioLevel);
-  myShader.setUniform('u_rotation', [rotationX, rotationY]);
-  myShader.setUniform('u_directions', currentDirs);
+  myShader.setUniform('u_agit', agit);
+  myShader.setUniform('u_rotation', [0.0, 0.0]);
+  myShader.setUniform('u_directions', pos);
   myShader.setUniform('u_masses', masses);
   myShader.setUniform('u_accent', CONFIG.accent);
-  myShader.setUniform('u_pull', [pullX, pullY]);
-  myShader.setUniform('u_fine', fine);
   myShader.setUniform('u_bg', bgTex);
   myShader.setUniform('u_glassTint', CONFIG.glassTint);
   myShader.setUniform('u_planeZ', CONFIG.planeZ);
@@ -265,9 +243,7 @@ function draw(){
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
-  myShader.setUniform('u_core', CONFIG.coreSize);
-  myShader.setUniform('u_cuts', cutBuf);
-  myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
+  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit)); // 興奮で縮む=実像が覗く
   sceneG.beginShape();
   sceneG.vertex(-1, -1, 0, 0, 0);
   sceneG.vertex( 1, -1, 0, 1, 0);
@@ -292,15 +268,38 @@ function draw(){
   adaptResolution();
 }
 
-/* ===== 飛散パルス ===== */
-function pulse(audio, lo, hi){
-  targetAudioLevel = audio;
+/* ===== 粒子シミュレーション（液体の物理） ===== */
+function stepSim(){
+  const k = 0.018, damp = 0.90, g = 0.0005;  // 凝集(表面張力) / 減衰 / 重力
+  let e = 0;
   for (let i = 0; i < numDrops; i++){
-    const m = masses[i];
-    const v = p5.Vector.random3D().mult(random(lo, hi) / m);
-    targetDirs[i * 3 + 0] = v.x;
-    targetDirs[i * 3 + 1] = v.y;
-    targetDirs[i * 3 + 2] = v.z;
+    const o = i * 3;
+    // 定位置へ戻る力(凝集) + 重力 + 生きた微小ノイズ
+    vel[o]   += (home[o]   - pos[o])   * k + (Math.random() - 0.5) * 0.0006;
+    vel[o+1] += (home[o+1] - pos[o+1]) * k - g + (Math.random() - 0.5) * 0.0006;
+    vel[o+2] += (home[o+2] - pos[o+2]) * k + (Math.random() - 0.5) * 0.0006;
+    vel[o] *= damp; vel[o+1] *= damp; vel[o+2] *= damp;
+    pos[o] += vel[o]; pos[o+1] += vel[o+1]; pos[o+2] += vel[o+2];
+    e += Math.hypot(vel[o], vel[o+1], vel[o+2]);
+  }
+  agit = constrain((e / numDrops) * 16.0, 0, 1);  // 運動エネルギー→興奮度
+}
+function impulseTap(str){              // タップ=外向きに爆ぜる
+  for (let i = 0; i < numDrops; i++){
+    const o = i * 3;
+    const L = Math.hypot(pos[o], pos[o+1], pos[o+2]) || 1;
+    const s = str / masses[i];         // 軽い粒ほど遠くへ
+    vel[o]   += pos[o]   / L * s + (Math.random() - 0.5) * str;
+    vel[o+1] += pos[o+1] / L * s + (Math.random() - 0.5) * str;
+    vel[o+2] += pos[o+2] / L * s + (Math.random() - 0.5) * str;
+  }
+}
+function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃力(パカッと分離)
+  for (let i = 0; i < numDrops; i++){
+    const o = i * 3;
+    const side = (pos[o] * nx + pos[o+1] * ny) >= 0 ? 1 : -1;
+    vel[o]   += nx * side * str;
+    vel[o+1] += ny * side * str;
   }
 }
 
@@ -308,84 +307,54 @@ function pulse(audio, lo, hi){
 function poke(px, py){
   tmx = map(px, 0, width, -1.0, 1.0);
   tmy = map(py, 0, height, 1.0, -1.0);
-  // タップの「強さ」は取れないので、連打の「速さ(間隔)」でバラけ方を決める
   const now = millis();
-  const dt = now - lastTap;
-  lastTap = now;
-  const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど1.0
-  fine = min(1.0, fine + 0.08 + rapid * 0.34);                     // 速いほど一気に細かく
-  pulse(2.0 + rapid * 3.5, 0.8, 1.4 + rapid * 1.8);                // 速いほど激しく弾ける
-  spawnDrops(Math.floor(1 + rapid * 3));  // 前面ガラスに水滴(小さく広範囲・隠し味)
+  const dt = now - lastTap; lastTap = now;
+  const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど強い
+  impulseTap(0.05 + rapid * 0.10);
+  spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
-}
-
-/* 前面ガラスの水滴を発生（最小サイズだけ・広範囲・少なめ＝隠し味） */
-function spawnDrops(n){
-  for (let i = 0; i < n; i++){
-    if (drops.length >= MAXDROPS) drops.shift();   // 古いものから入れ替え
-    drops.push({
-      x: random(0.05, 0.95),
-      y: random(0.08, 0.95),
-      r: random(0.004, 0.008),   // 一番小さいサイズだけ
-      life: random(0.7, 1.0),
-    });
-  }
-}
-
-/* 水滴の更新：小さい粒は表面張力で留まり、寿命でゆっくり消える */
-function updateDrops(){
-  for (let k = drops.length - 1; k >= 0; k--){
-    const d = drops[k];
-    d.life -= 0.0035;
-    if (d.life <= 0) drops.splice(k, 1);
-  }
-  for (let i = 0; i < MAXDROPS; i++){
-    const o = i * 4;
-    if (i < drops.length){
-      const d = drops[i];
-      dropBuf[o] = d.x; dropBuf[o+1] = d.y; dropBuf[o+2] = d.r;
-      dropBuf[o+3] = constrain(d.life, 0, 1);
-    } else {
-      dropBuf[o] = dropBuf[o+1] = dropBuf[o+2] = dropBuf[o+3] = 0;
-    }
-  }
 }
 function swipe(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
   const sp = mag(dx, dy);
-  // スワイプ＝液体を指方向へ引き伸ばす(smear)＋速い横スワイプで切る。回転は無し
   tmx = map(mouseX, 0, width, -1.0, 1.0);
   tmy = map(mouseY, 0, height, 1.0, -1.0);
-  if (sp > 2){
-    tpullX = constrain(dx *  0.032, -1.2, 1.2);
-    tpullY = constrain(dy * -0.032, -1.2, 1.2);
-    targetAudioLevel = max(targetAudioLevel, min(sp * 0.03, 1.6));
-  }
-  // 速い横スワイプ＝切れ目を1本追加（縦はスクロール優先・連続スワイプはthrottle）
-  if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 240){
+  // 速い横スワイプ＝水を切る(両側へ撃力で分離)。縦はスクロール優先・throttle
+  if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 200){
     const L = Math.hypot(dx, dy) || 1;
-    addCut(dy / L, dx / L, Math.min(1.0, sp * 0.05));
+    impulseCut(dy / L, dx / L, Math.min(0.10, sp * 0.006));
+    spawnDrops(2);
     lastCutTime = millis();
   }
   lastInteract = millis();
 }
 
-/* 切れ目を追加（複数本。切った本数分わかれ、長時間かけて再融合） */
-function addCut(nx, ny, amt){
-  if (cuts.length >= MAXCUTS) cuts.shift();
-  cuts.push({ nx, ny, amt });
-}
-function updateCuts(){
-  for (let k = cuts.length - 1; k >= 0; k--){
-    cuts[k].amt *= 0.997;                 // ゆっくり塞がる（かなり時間が経つと融合）
-    if (cuts[k].amt < 0.01) cuts.splice(k, 1);
+/* 前面ガラスの水滴：最小サイズで、下に流れて画面外で消える（フェードしない） */
+function spawnDrops(n){
+  for (let i = 0; i < n; i++){
+    if (drops.length >= MAXDROPS) drops.shift();
+    drops.push({
+      x: random(0.05, 0.95),
+      y: random(0.20, 0.95),
+      r: random(0.003, 0.006),       // とても小さい
+      vy: random(0.0002, 0.0010),    // 下に流れる速度(個体差)
+    });
   }
-  for (let i = 0; i < MAXCUTS; i++){
-    const o = i * 3;
-    if (i < cuts.length){
-      cutBuf[o] = cuts[i].nx; cutBuf[o+1] = cuts[i].ny; cutBuf[o+2] = cuts[i].amt;
+}
+function updateDrops(){
+  for (let k = drops.length - 1; k >= 0; k--){
+    const d = drops[k];
+    d.vy += 0.000004;                  // ゆっくり加速
+    d.y  -= d.vy;                      // 下へ流れる(suv.y=下が0)
+    if (d.y < -0.06) drops.splice(k, 1);  // 画面下で消える
+  }
+  for (let i = 0; i < MAXDROPS; i++){
+    const o = i * 4;
+    if (i < drops.length){
+      dropBuf[o] = drops[i].x; dropBuf[o+1] = drops[i].y;
+      dropBuf[o+2] = drops[i].r; dropBuf[o+3] = 1.0;
     } else {
-      cutBuf[o] = cutBuf[o+1] = cutBuf[o+2] = 0;
+      dropBuf[o] = dropBuf[o+1] = dropBuf[o+2] = dropBuf[o+3] = 0;
     }
   }
 }
@@ -457,13 +426,11 @@ const fs = `
   uniform float u_time;
   uniform vec2  u_resolution;
   uniform vec2  u_mouse;
-  uniform float u_audioLevel;
+  uniform float u_agit;       // 興奮度0..1(運動エネルギー)
   uniform vec2  u_rotation;
   uniform vec3  u_directions[28];
   uniform float u_masses[28];
   uniform vec3  u_accent;
-  uniform vec2  u_pull;       // 指で引いている向き(尾を引く/body を引っ張る)
-  uniform float u_fine;       // 細かさ(連打で増える)
   uniform sampler2D u_bg;     // 背景テクスチャ(ロゴ/タイポ)
   uniform float u_glassTint;  // ガラスの透け具合
   uniform float u_planeZ;     // ロゴ平面の奥行き
@@ -475,8 +442,6 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
-  uniform vec3  u_cuts[6];    // 切れ目(nx,ny,amt) 複数本。切った本数分わかれる
-  uniform float u_cutWidth;   // 切れ目の最大幅
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -499,60 +464,21 @@ const fs = `
   }
 
   float mapScene(vec3 p){
-    p = rotate(p, u_rotation);
-
-    float wobble = sin(p.x * 2.0 + u_time * 2.0) * cos(p.y * 2.0 + u_time * 1.5);
-    p += wobble * (u_audioLevel * 0.1);
-
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    // 細かさ/興奮で融合を弱める → 連打でバラけて極小の飛沫へ
-    float blendK = mix(0.38, 0.09, clamp(u_audioLevel * 0.18 + u_fine * 1.0, 0.0, 1.0)); // 散っても少し繋いで糸を引く
-    vec3 prevPos = u_directions[27];
-
+    // 興奮(運動エネルギー)で融合を弱め、粒が離れると自然に分裂・再融合(物理由来)
+    float blendK = mix(0.40, 0.05, u_agit);
     for (int i = 0; i < 28; i++){
-      vec3 currentDir = u_directions[i];
+      vec3 parentPos = mousePos + u_directions[i];        // 粒子の位置(シミュレーション)
       float m = u_masses[i];
-
-      vec3 targetPos = mix(currentDir, prevPos, 0.2);
-      // 細かいほど外へ広がって飛び散る
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.30 + u_fine * 1.15);
-      parentPos.xy -= u_pull * (0.12 + 0.95 * (float(i) / 27.0)); // 後ろの質点ほど長く尾を引く
-      // 重力: 散らばってるほど(audio/fine)下へ沈む。重い粒ほど落ちる
-      parentPos.y -= (u_audioLevel * 0.10 + u_fine * 0.38) * (0.4 + m * 0.5);
-
-      float t = u_time * (2.0 + m) + float(i) * 1.5;
-      parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
-
-      float bounce = sin(u_time * 5.0 + float(i)) * 0.028 * (u_audioLevel + 0.5);
-      float pSize = (0.025 + (m * 0.075) + bounce) * (1.0 - 0.6 * u_fine); // 大小差を強く(小はとことん小)
-
-      // 速度＋重力方向へ伸びる"しずく形"（無重力の球を脱却）
-      float stretchK = clamp(u_audioLevel * 0.16 + u_fine * 0.34, 0.0, 0.5);
-      vec3 av = currentDir + vec3(0.0, -0.6, 0.0);
-      vec3 axis = av / (length(av) + 0.0001);
-      vec3 rel = p - parentPos;
-      rel -= axis * dot(rel, axis) * stretchK;
-
-      float ripple = sin(length(rel) * 18.0 - u_time * 9.0) * 0.02 * u_audioLevel;
-      float drop = length(rel) - (pSize + ripple);
-
+      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit); // 興奮で少し小さく
+      float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.015 * u_agit;
+      float drop = length(p - parentPos) - (pSize + ripple);
       d = smin(d, drop, blendK);
-      prevPos = currentDir;
     }
-    // 中央コア: 休止時はロゴを覆う大玉。連打(fine)で縮んで割れ、素ロゴが覗く
-    float coreR = u_core * (1.0 - 0.85 * u_fine);
-    float core = length(p - mousePos) - coreR;
+    // 中央コア: 落ち着いてる時はロゴを覆う。興奮(u_coreをJS側で縮小)で割れて実像が覗く
+    float core = length(p - mousePos) - u_core;
     d = smin(d, core, 0.40);
-    // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
-    d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.007 * u_fine;
-    // スワイプで水を切る: 切った本数分のギャップで分割。長時間かけて再融合
-    for (int ci = 0; ci < 6; ci++){
-      vec3 ct = u_cuts[ci];
-      if (ct.z <= 0.001) continue;
-      float gap = u_cutWidth * ct.z - abs(dot(p.xy - mousePos.xy, ct.xy));
-      d = max(d, gap);
-    }
     return d;
   }
 
