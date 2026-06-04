@@ -71,7 +71,10 @@ let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロー
 const MAXDROPS = 30;                 // 前面ガラスの水滴
 let drops = [];                      // {x,y,r,life,vy}
 let dropBuf = new Float32Array(MAXDROPS * 4);
-let cutDirX = 1, cutDirY = 0, cutAmt = 0; // スワイプの切断
+const MAXCUTS = 6;                   // スワイプの切れ目(複数本)
+let cuts = [];                       // {nx,ny,amt}
+let cutBuf = new Float32Array(MAXCUTS * 3);
+let lastCutTime = -9999;
 let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
@@ -188,13 +191,11 @@ function windowResized(){
 function adaptResolution(){
   fpsAvg = lerp(fpsAvg, frameRate(), 0.08);
   if (adjustCool > 0){ adjustCool--; return; }
-  if (frameCount < 45) return;
+  if (frameCount < 60) return;
+  // 重い時だけ下げて収束させる（上げ直しはしない＝リサイズ往復による点滅を防ぐ）
   if (fpsAvg < 45 && rmLong > CONFIG.res.min){
     rmLong = max(CONFIG.res.min, floor(rmLong * 0.85));
-    reflow(); adjustCool = 45;
-  } else if (fpsAvg > 56 && rmLong < rmMaxDev){
-    rmLong = min(rmMaxDev, floor(rmLong * 1.08));
-    reflow(); adjustCool = 70;
+    reflow(); adjustCool = 90;
   }
 }
 
@@ -230,8 +231,8 @@ function draw(){
   targetAudioLevel *= 0.95;
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
   fine *= 0.996;   // 細かさはゆっくり戻る（飛散がしばらく滞留＝戻りが遅い）
-  cutAmt *= 0.90;  // 切れ目はゆっくり塞がる（水が戻る）
   updateDrops();
+  updateCuts();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
   scrollProg += (scrollTarget - scrollProg) * 0.08;
@@ -265,8 +266,7 @@ function draw(){
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
   myShader.setUniform('u_core', CONFIG.coreSize);
-  myShader.setUniform('u_cutDir', [cutDirX, cutDirY]);
-  myShader.setUniform('u_cutAmt', cutAmt);
+  myShader.setUniform('u_cuts', cutBuf);
   myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
   sceneG.beginShape();
   sceneG.vertex(-1, -1, 0, 0, 0);
@@ -319,29 +319,25 @@ function poke(px, py){
   lastInteract = now;
 }
 
-/* 前面ガラスの水滴を発生（小さく・広範囲・少なめ＝隠し味） */
+/* 前面ガラスの水滴を発生（最小サイズだけ・広範囲・少なめ＝隠し味） */
 function spawnDrops(n){
   for (let i = 0; i < n; i++){
     if (drops.length >= MAXDROPS) drops.shift();   // 古いものから入れ替え
-    const big = random() < 0.18;
     drops.push({
       x: random(0.05, 0.95),
-      y: random(0.10, 0.95),
-      r: big ? random(0.010, 0.020) : random(0.004, 0.009),  // 小さめ
+      y: random(0.08, 0.95),
+      r: random(0.004, 0.008),   // 一番小さいサイズだけ
       life: random(0.7, 1.0),
-      vy: 0,
     });
   }
 }
 
-/* 水滴の更新：小さい粒は表面張力で留まり、大きい粒は重力で下へ滴る(suv.yを減らす=下) */
+/* 水滴の更新：小さい粒は表面張力で留まり、寿命でゆっくり消える */
 function updateDrops(){
   for (let k = drops.length - 1; k >= 0; k--){
     const d = drops[k];
     d.life -= 0.0035;
-    if (d.r > 0.013){ d.vy += 0.000020; d.y -= d.vy; }  // 大粒：下へ垂れる
-    else { d.y -= 0.000005; }                           // 小粒：ほぼ静止
-    if (d.life <= 0 || d.y < -0.15) drops.splice(k, 1);
+    if (d.life <= 0) drops.splice(k, 1);
   }
   for (let i = 0; i < MAXDROPS; i++){
     const o = i * 4;
@@ -354,10 +350,10 @@ function updateDrops(){
     }
   }
 }
-function dragRotate(){
+function swipe(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
   const sp = mag(dx, dy);
-  // スワイプ＝液体を指の方向へ"引き伸ばす"(長い尾を引く smear)。回転は控えめ
+  // スワイプ＝液体を指方向へ引き伸ばす(smear)＋速い横スワイプで切る。回転は無し
   tmx = map(mouseX, 0, width, -1.0, 1.0);
   tmy = map(mouseY, 0, height, 1.0, -1.0);
   if (sp > 2){
@@ -365,22 +361,39 @@ function dragRotate(){
     tpullY = constrain(dy * -0.032, -1.2, 1.2);
     targetAudioLevel = max(targetAudioLevel, min(sp * 0.03, 1.6));
   }
-  if (abs(dx) >= abs(dy)){            // 横移動が主のときだけ回転（控えめ・縦=スクロール優先）
-    targetRotationY += dx * 0.004;
-    targetRotationX += dy * 0.004;
-    if (sp > 8){                      // 速い横スワイプ＝水を切る（切断面はスワイプに直交）
-      const L = Math.hypot(dx, dy) || 1;
-      cutDirX = dy / L; cutDirY = dx / L;
-      cutAmt = Math.min(1.0, sp * 0.045);
-    }
+  // 速い横スワイプ＝切れ目を1本追加（縦はスクロール優先・連続スワイプはthrottle）
+  if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 240){
+    const L = Math.hypot(dx, dy) || 1;
+    addCut(dy / L, dx / L, Math.min(1.0, sp * 0.05));
+    lastCutTime = millis();
   }
   lastInteract = millis();
 }
 
+/* 切れ目を追加（複数本。切った本数分わかれ、長時間かけて再融合） */
+function addCut(nx, ny, amt){
+  if (cuts.length >= MAXCUTS) cuts.shift();
+  cuts.push({ nx, ny, amt });
+}
+function updateCuts(){
+  for (let k = cuts.length - 1; k >= 0; k--){
+    cuts[k].amt *= 0.997;                 // ゆっくり塞がる（かなり時間が経つと融合）
+    if (cuts[k].amt < 0.01) cuts.splice(k, 1);
+  }
+  for (let i = 0; i < MAXCUTS; i++){
+    const o = i * 3;
+    if (i < cuts.length){
+      cutBuf[o] = cuts[i].nx; cutBuf[o+1] = cuts[i].ny; cutBuf[o+2] = cuts[i].amt;
+    } else {
+      cutBuf[o] = cutBuf[o+1] = cutBuf[o+2] = 0;
+    }
+  }
+}
+
 function touchStarted(){ poke(mouseX, mouseY); }     // returnしない
-function touchMoved(){ dragRotate(); }
+function touchMoved(){ swipe(); }
 function mousePressed(){ poke(mouseX, mouseY); }
-function mouseDragged(){ dragRotate(); }
+function mouseDragged(){ swipe(); }
 
 /* ===== shaders ===== */
 const vs = `
@@ -462,8 +475,7 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
-  uniform vec2  u_cutDir;     // 切断面の法線(スワイプで水を切る)
-  uniform float u_cutAmt;     // 切れ目の深さ(時間で塞がる)
+  uniform vec3  u_cuts[6];    // 切れ目(nx,ny,amt) 複数本。切った本数分わかれる
   uniform float u_cutWidth;   // 切れ目の最大幅
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -534,21 +546,25 @@ const fs = `
     d = smin(d, core, 0.40);
     // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
     d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.007 * u_fine;
-    // スワイプで水を切る: 切断面に沿って薄いギャップを彫り左右に分離(時間で塞がる)
-    if (u_cutAmt > 0.001){
-      float gap = u_cutWidth * u_cutAmt - abs(dot(p.xy - mousePos.xy, u_cutDir));
+    // スワイプで水を切る: 切った本数分のギャップで分割。長時間かけて再融合
+    for (int ci = 0; ci < 6; ci++){
+      vec3 ct = u_cuts[ci];
+      if (ct.z <= 0.001) continue;
+      float gap = u_cutWidth * ct.z - abs(dot(p.xy - mousePos.xy, ct.xy));
       d = max(d, gap);
     }
     return d;
   }
 
-  vec3 getNormal(vec3 p){
-    vec2 e = vec2(0.01, 0.0);
-    return normalize(vec3(
-      mapScene(p + e.xyy) - mapScene(p - e.xyy),
-      mapScene(p + e.yxy) - mapScene(p - e.yxy),
-      mapScene(p + e.yyx) - mapScene(p - e.yyx)
-    ));
+  vec3 getNormal(vec3 p){            // 四面体4タップ(6→4でmapScene評価を削減)
+    const vec2 k = vec2(1.0, -1.0);
+    const float e = 0.01;
+    return normalize(
+      k.xyy * mapScene(p + k.xyy * e) +
+      k.yyx * mapScene(p + k.yyx * e) +
+      k.yxy * mapScene(p + k.yxy * e) +
+      k.xxx * mapScene(p + k.xxx * e)
+    );
   }
 
   // 擬似環境(スタジオ): ほぼ暗く、明るいソフトボックスの帯だけが鋭く映り込む = 締まったクローム
@@ -645,10 +661,10 @@ const fs = `
         // 厚み計測 → Beer-Lambert吸収（厚い所ほど暗い＝体積感）。色はニュートラル(茶濁り防止)
         float thick = 0.0;
         vec3 ip = p + rdir * 0.02;
-        for (int k = 0; k < 14; k++){
+        for (int k = 0; k < 10; k++){    // 厚み計測(14→10、ステップ拡大で同範囲)
           if (mapScene(ip) > 0.0) break;
-          ip += rdir * 0.06;
-          thick += 0.06;
+          ip += rdir * 0.085;
+          thick += 0.085;
         }
         refr *= exp(-thick * u_absorb * vec3(1.02, 1.0, 0.97)); // ほぼ無彩色＋ごく僅か寒色
 
