@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Hayashi Design Works — Ink</title>
+<title>Hayashi Design Works — Hydra</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#0a0a0b;
-    /* pan-y: 縦スワイプはページスクロールに渡す。横/タップは作品が拾う */
+  html, body { margin:0; height:100%; overflow:hidden; background:#8c8c8c;
     -webkit-user-select:none; user-select:none; }
+  /* pan-y: 縦スワイプはページスクロールへ。タップ/横ドラッグは作品が拾う */
   html, body, canvas { touch-action:pan-y; }
   canvas { display:block; }
 </style>
@@ -16,235 +16,272 @@
 <body>
 <script>
 /* =========================================================
-   Hayashi Design Works — INK (新規制作 / 別物 v1)
+   Hayashi Design Works — HYDRA (新規制作 / 別物 v2)
    ---------------------------------------------------------
-   コンセプト: 指でなぞると水中にインクが広がる
-   ・タッチ主役（マルチタッチ）。端末センサーは不使用 = Wix iframeでも動く
-   ・モノトーン + 差し色（速い/新しいインクの芯だけ色が灯る）
-   ・軽量: ソフトスプライト + ノイズ流れ場 + ゆっくり拡散で「滲み」を再現
-   ・無操作でも環境インクが漂う
+   SDFレイマーチングの液体生命体。触ると飛び散り、粘って戻る。
+   元ネタ: GENUARY 2026 "Resonant Hydra-morphic" を
+   サイトのヒーロー用に再設計。
+   ・スマホ縦・全画面 / タッチ主役（端末センサー・マイク不使用 = Wix対応）
+   ・スクロールを殺さない（縦=ページ送り, タップ=飛散, 横ドラッグ=回転）
+   ・低解像度バッファ→CSS拡大で軽量化
+   ・モノトーン + 差し色（飛び散った瞬間だけ色が灯る）
    ========================================================= */
 
-/* ===== CONFIG（ここだけ触れば調整できる） ===== */
+/* ===== CONFIG ===== */
 const CONFIG = {
-  bg:        [10, 10, 12],     // 背景（ほぼ黒）
-  ink:       [235, 238, 245],  // 落ち着いたインク色（オフホワイト）
-  accent:    [40, 110, 255],   // 差し色（青）。例: 朱[255,72,48] / 緑[40,210,150]
-  fade:      0.045,            // 1フレームの消え具合（大きいほど早く消える）
-  maxParts:  900,             // パーティクル上限（端末に応じて自動調整）
-  flowScale: 0.0016,          // 流れ場の細かさ
-  flowSpeed: 0.18,            // 流れ場の動く速さ
-  flowForce: 0.16,            // 水流に押される強さ
-  damping:   0.94,            // インクの粘り（小さいほどすぐ止まる）
-  lifeDecay: 0.006,           // 寿命の減り
+  accent: [0.20, 0.50, 1.0],   // 差し色(青)。朱:[1.0,0.28,0.18] 緑:[0.16,0.82,0.59]
+  renderMaxMobile: 480,        // スマホ時のレンダ最大辺(小さいほど軽い)
+  renderMaxDesktop: 760,
 };
 
-/* ===== state ===== */
-let parts = [];
-let blob;                    // ソフトな円スプライト
-let t = 0;
-let lastTouchInfo = {};      // タッチid -> 直前位置
-let everTouched = false;
-let lastTapTime = 0;
-let ambientTimer = 0;
-let DPR = 1;
+let myShader, cnv;
+let RENDER_MAX = 700;
 
-/* ===== setup ===== */
+let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
+let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
+let mx = 0, my = 0, tmx = 0, tmy = 0;                 // 生命体が向かう先(-1..1)
+let lastInteract = -99999;
+
+let numDrops = 16;
+let currentDirs = [], targetDirs = [], masses = [];
+
+/* ===== sizing: 低解像度で描いてCSSで全画面に引き伸ばす ===== */
+function renderSize(){
+  const a = windowWidth / windowHeight;
+  let w, h;
+  if (windowWidth >= windowHeight){ w = RENDER_MAX; h = Math.round(RENDER_MAX / a); }
+  else                            { h = RENDER_MAX; w = Math.round(RENDER_MAX * a); }
+  return { w: max(2, w), h: max(2, h) };
+}
+function applyDisplaySize(){
+  cnv.style('width',  windowWidth  + 'px');
+  cnv.style('height', windowHeight + 'px');
+}
+function pickRenderMax(){
+  RENDER_MAX = (min(windowWidth, windowHeight) < 700) ? CONFIG.renderMaxMobile : CONFIG.renderMaxDesktop;
+}
+
 function setup(){
-  // 軽量化: スマホは等倍、PCも控えめ（塗り面積=DPR^2 が効くので効果大）
-  const small = min(windowWidth, windowHeight) < 700;
-  DPR = small ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
-  pixelDensity(DPR);
-  createCanvas(windowWidth, windowHeight);
-  if (small) CONFIG.maxParts = 380;
-  makeBlob();
-  paintBg(255);
-  frameRate(60);
-}
-
-function windowResized(){
-  resizeCanvas(windowWidth, windowHeight);
-  paintBg(255);
-}
-
-/* 背景を塗る（aは0-255） */
-function paintBg(a){
+  pixelDensity(1);
+  pickRenderMax();
+  const r = renderSize();
+  cnv = createCanvas(r.w, r.h, WEBGL);
+  applyDisplaySize();
+  myShader = createShader(vs, fs);
   noStroke();
-  fill(CONFIG.bg[0], CONFIG.bg[1], CONFIG.bg[2], a);
-  rect(0, 0, width, height);
+  for (let i = 0; i < numDrops; i++){
+    const v = p5.Vector.random3D().mult(1.0);
+    currentDirs.push(v.x, v.y, v.z);
+    targetDirs.push(v.x, v.y, v.z);
+    masses.push(random(0.5, 2.0));
+  }
 }
-
-/* ソフトな放射状グラデのスプライトを1枚だけ作る（毎回shadowBlurより遥かに軽い） */
-function makeBlob(){
-  const S = 128;
-  blob = createGraphics(S, S);
-  blob.noStroke();
-  const c = S / 2;
-  const ctx = blob.drawingContext;
-  const g = ctx.createRadialGradient(c, c, 0, c, c, c);
-  g.addColorStop(0.0, 'rgba(255,255,255,1.0)');
-  g.addColorStop(0.25,'rgba(255,255,255,0.55)');
-  g.addColorStop(1.0, 'rgba(255,255,255,0.0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, S, S);
+function windowResized(){
+  pickRenderMax();
+  const r = renderSize();
+  resizeCanvas(r.w, r.h);
+  applyDisplaySize();
 }
 
 /* ===== draw ===== */
 function draw(){
-  // 古いインクをゆっくり沈める（滲んで消える）
-  paintBg(CONFIG.fade * 255);
+  if (!myShader) return;
+  shader(myShader);
 
-  // 環境インク（無操作でも漂う）
-  ambient();
-
-  // パーティクル更新・描画
-  push();
-  blendMode(ADD);  // 暗い背景の上で光を足し込む = インクが滲んで光る
-  for (let i = parts.length - 1; i >= 0; i--){
-    const p = parts[i];
-    updateParticle(p);
-    drawParticle(p);
-    if (p.life <= 0) parts.splice(i, 1);
-  }
-  pop();
-
-  drawHint();
-  t += CONFIG.flowSpeed * 0.01;
-}
-
-/* ===== particle ===== */
-function spawn(x, y, vx, vy, burst){
-  for (let i = 0; i < burst; i++){
-    if (parts.length >= CONFIG.maxParts) parts.shift(); // 古いものから捨てる
-    const spread = 6;
-    const jitter = 0.45;
-    parts.push({
-      x: x + random(-spread, spread),
-      y: y + random(-spread, spread),
-      vx: vx * 0.18 + random(-jitter, jitter),
-      vy: vy * 0.18 + random(-jitter, jitter),
-      size: random(26, 64),
-      life: 1.0,
-      decay: CONFIG.lifeDecay * random(0.7, 1.4),
-      // 勢いがあるほど差し色を多めに灯す
-      accent: constrain(mag(vx, vy) * 0.05, 0, 1),
-    });
-  }
-}
-
-function updateParticle(p){
-  // 流れ場（水流）に押される
-  const a = noise(p.x * CONFIG.flowScale, p.y * CONFIG.flowScale, t) * TWO_PI * 2;
-  p.vx += cos(a) * CONFIG.flowForce;
-  p.vy += sin(a) * CONFIG.flowForce;
-  p.vx *= CONFIG.damping;
-  p.vy *= CONFIG.damping;
-  p.x += p.vx;
-  p.y += p.vy;
-  p.life -= p.decay;
-  p.accent *= 0.97;          // 差し色は時間とともに白へ落ち着く
-}
-
-function drawParticle(p){
-  if (p.life <= 0) return;
-  const age = 1 - p.life;
-  // 老化で広がる（インクが滲む）
-  const s = p.size * (1 + age * 1.8);
-  // 色: 差し色 → インク色 へ補間
-  const r = lerp(CONFIG.ink[0], CONFIG.accent[0], p.accent);
-  const g = lerp(CONFIG.ink[1], CONFIG.accent[1], p.accent);
-  const b = lerp(CONFIG.ink[2], CONFIG.accent[2], p.accent);
-  // 加算合成なので各粒は薄く。寿命で消えていく
-  const alpha = p.life * 42;
-  push();
-  tint(r, g, b, alpha);
-  imageMode(CENTER);
-  image(blob, p.x, p.y, s, s);
-  pop();
-}
-
-/* ===== 環境インク: たまに端から漂わせる ===== */
-function ambient(){
-  ambientTimer--;
-  if (ambientTimer > 0) return;
-  ambientTimer = floor(random(6, 16));
-  // 画面のどこかに弱い種をまく（操作後は控えめ）
-  const intensity = everTouched ? 0.4 : 1.0;
-  if (random() < 0.7 * intensity){
-    const x = random(width);
-    const y = random(height);
-    spawn(x, y, random(-0.6, 0.6), random(-0.6, 0.6), 1);
-  }
-}
-
-/* ===== hint（最初だけ） ===== */
-let hintAlpha = 0;
-function drawHint(){
-  const target = everTouched ? 0 : 120;
-  hintAlpha = lerp(hintAlpha, target, 0.06);
-  if (hintAlpha < 1) return;
-  push();
-  textAlign(CENTER, CENTER);
-  textSize(min(width, height) * 0.035);
-  textStyle(NORMAL);
-  fill(CONFIG.ink[0], CONFIG.ink[1], CONFIG.ink[2], hintAlpha);
-  text('touch  ·  指でなぞる', width / 2, height * 0.9);
-  pop();
-}
-
-/* ===== input: touch（マルチタッチ）=====
-   重要: preventDefault しない（return false しない）。
-   縦スワイプは touch-action:pan-y でページスクロールに渡す。 */
-function touchStarted(){
-  registerTap();
-  handleTouches(true);
-  // return しない = ブラウザのスクロールを邪魔しない
-}
-function touchMoved(){
-  handleTouches(false);
-}
-function touchEnded(){
-  // 終了したタッチの記録を掃除
-  const live = {};
-  for (const tc of touches){ if (tc.id != null) live[tc.id] = true; }
-  for (const id in lastTouchInfo){ if (!live[id]) delete lastTouchInfo[id]; }
-}
-
-function handleTouches(isStart){
-  everTouched = true;
-  if (touches.length === 0){
-    // 一部端末はtouches空 → mouseで代用
-    emitFrom('mouse', mouseX, mouseY, isStart);
-    return;
-  }
-  for (const tc of touches){
-    const id = tc.id != null ? tc.id : 'mouse';
-    emitFrom(id, tc.x, tc.y, isStart);
-  }
-}
-
-function emitFrom(id, x, y, isStart){
-  const prev = lastTouchInfo[id];
-  let vx = 0, vy = 0;
-  if (prev && !isStart){ vx = x - prev.x; vy = y - prev.y; }
-  lastTouchInfo[id] = { x, y };
-  const speed = mag(vx, vy);
-  // 速いほど多く吐く。軽量化のため控えめに
-  const burst = constrain(floor(speed * 0.25) + (isStart ? 3 : 1), 1, 7);
-  spawn(x, y, vx, vy, burst);
-}
-
-/* ===== input: mouse（PCプレビュー用）===== */
-function mousePressed(){ everTouched = true; emitFrom('mouse', mouseX, mouseY, true); }
-function mouseDragged(){ everTouched = true; emitFrom('mouse', mouseX, mouseY, false); }
-function mouseReleased(){ delete lastTouchInfo['mouse']; }
-
-/* ===== ダブルタップでクリア ===== */
-function registerTap(){
   const now = millis();
-  if (now - lastTapTime < 320){ paintBg(255); parts = []; }
-  lastTapTime = now;
+  const idle = (now - lastInteract) > 2200;
+  if (idle){
+    // 無操作時: ゆっくり自転しながら呼吸し、たまに静かに脈打つ
+    targetRotationY += 0.0016;
+    const breath = 0.45 + 0.30 * sin(now * 0.0012);
+    if (targetAudioLevel < breath) targetAudioLevel = breath;
+    tmx = sin(now * 0.00030) * 0.32;
+    tmy = cos(now * 0.00041) * 0.28;
+    if (frameCount % 260 === 0) pulse(1.4, 1.2, 2.2);
+  }
+
+  // なめらかな追従（粘性のある動き）
+  rotationX += (targetRotationX - rotationX) * 0.08;
+  rotationY += (targetRotationY - rotationY) * 0.08;
+  mx += (tmx - mx) * 0.06;
+  my += (tmy - my) * 0.06;
+  for (let i = 0; i < currentDirs.length; i++){
+    currentDirs[i] += (targetDirs[i] - currentDirs[i]) * 0.05;
+  }
+  targetAudioLevel *= 0.95;
+  currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
+
+  myShader.setUniform('u_resolution', [float(width), float(height)]);
+  myShader.setUniform('u_time', now / 1000.0);
+  myShader.setUniform('u_mouse', [mx, my]);
+  myShader.setUniform('u_audioLevel', currentAudioLevel);
+  myShader.setUniform('u_rotation', [rotationX, rotationY]);
+  myShader.setUniform('u_directions', currentDirs);
+  myShader.setUniform('u_masses', masses);
+  myShader.setUniform('u_accent', CONFIG.accent);
+
+  beginShape();
+  vertex(-1, -1, 0, 0, 0);
+  vertex( 1, -1, 0, 1, 0);
+  vertex( 1,  1, 0, 1, 1);
+  vertex(-1,  1, 0, 0, 1);
+  endShape(CLOSE);
 }
+
+/* ===== 飛散パルス（強さを引数で） ===== */
+function pulse(audio, lo, hi){
+  targetAudioLevel = audio;
+  for (let i = 0; i < numDrops; i++){
+    const m = masses[i];
+    const v = p5.Vector.random3D().mult(random(lo, hi) / m);
+    targetDirs[i * 3 + 0] = v.x;
+    targetDirs[i * 3 + 1] = v.y;
+    targetDirs[i * 3 + 2] = v.z;
+  }
+}
+
+/* ===== interaction（スクロールは殺さない = preventDefaultしない） ===== */
+function poke(px, py){
+  tmx = map(px, 0, width, -1.0, 1.0);
+  tmy = map(py, 0, height, 1.0, -1.0);
+  pulse(4.0, 3.0, 5.0);
+  lastInteract = millis();
+}
+function dragRotate(){
+  const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
+  // 横移動が主のときだけ回転（縦スワイプ＝スクロールを邪魔しない）
+  if (abs(dx) >= abs(dy)){
+    targetRotationY += dx * 0.01;
+    targetRotationX += dy * 0.01;
+  }
+  tmx = map(mouseX, 0, width, -1.0, 1.0);
+  tmy = map(mouseY, 0, height, 1.0, -1.0);
+  lastInteract = millis();
+}
+
+function touchStarted(){ poke(mouseX, mouseY); }           // returnしない
+function touchMoved(){ dragRotate(); }
+function mousePressed(){ poke(mouseX, mouseY); }
+function mouseDragged(){ dragRotate(); }
+
+/* ===== shaders ===== */
+const vs = `
+  attribute vec3 aPosition;
+  void main(){ gl_Position = vec4(aPosition, 1.0); }
+`;
+
+const fs = `
+  precision highp float;
+  uniform float u_time;
+  uniform vec2  u_resolution;
+  uniform vec2  u_mouse;
+  uniform float u_audioLevel;
+  uniform vec2  u_rotation;
+  uniform vec3  u_directions[16];
+  uniform float u_masses[16];
+  uniform vec3  u_accent;
+
+  float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+  vec3 rotate(vec3 p, vec2 r){
+    float s = sin(r.x), c = cos(r.x);
+    p.yz *= mat2(c, -s, s, c);
+    s = sin(r.y); c = cos(r.y);
+    p.xz *= mat2(c, s, -s, c);
+    return p;
+  }
+
+  float smin(float a, float b, float k){
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+  }
+
+  float mapScene(vec3 p){
+    p = rotate(p, u_rotation);
+
+    float wobble = sin(p.x * 2.0 + u_time * 2.0) * cos(p.y * 2.0 + u_time * 1.5);
+    p += wobble * (u_audioLevel * 0.1);
+
+    vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
+    float d = 1e10;
+    float blendK = 0.4 + u_audioLevel * 0.4;
+    vec3 prevPos = u_directions[15];
+
+    for (int i = 0; i < 16; i++){
+      vec3 currentDir = u_directions[i];
+      float m = u_masses[i];
+
+      vec3 targetPos = mix(currentDir, prevPos, 0.2);
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.2 + 0.2);
+
+      float t = u_time * (2.0 + m) + float(i) * 1.5;
+      parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.1;
+
+      float bounce = sin(u_time * 5.0 + float(i)) * 0.02 * (u_audioLevel + 0.5);
+      float pSize = 0.08 + (m * 0.04) + bounce;
+
+      float ripple = sin(length(p - parentPos) * 15.0 - u_time * 8.0) * 0.015 * u_audioLevel;
+      float drop = length(p - parentPos) - (pSize + ripple);
+
+      d = smin(d, drop, blendK);
+      prevPos = currentDir;
+    }
+    return d;
+  }
+
+  vec3 getNormal(vec3 p){
+    vec2 e = vec2(0.01, 0.0);
+    return normalize(vec3(
+      mapScene(p + e.xyy) - mapScene(p - e.xyy),
+      mapScene(p + e.yxy) - mapScene(p - e.yxy),
+      mapScene(p + e.yyx) - mapScene(p - e.yyx)
+    ));
+  }
+
+  void main(){
+    vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
+
+    vec3 ro = vec3(0.0, 0.0, 5.0);
+    vec3 rd = normalize(vec3(uv, -2.0));
+
+    vec3 bgColor = vec3(0.55);
+    float bgGlow = 1.0 - length(uv) * 0.8;
+    vec3 col = bgColor * bgGlow;
+
+    float t = 0.0;
+    for (int i = 0; i < 70; i++){
+      vec3 p = ro + rd * t;
+      float d = mapScene(p);
+      if (d < 0.001){
+        vec3 n = getNormal(p);
+
+        float rim = pow(1.0 + dot(rd, n), 3.0);
+        vec3 ld = normalize(vec3(1.0, 2.0, 3.0));
+        float diff = smoothstep(0.0, 1.0, max(dot(n, ld), 0.0));
+        float occ = clamp(mapScene(p + n * 0.15) / 0.15, 0.0, 1.0);
+
+        vec3 baseWhite = vec3(0.98);
+        vec3 shadowGray = vec3(0.42);
+
+        col = mix(shadowGray, baseWhite, diff);
+        col += rim * 0.5;
+        // 差し色: リムに、飛散して興奮しているほど強く灯る
+        col += rim * u_accent * (0.25 + u_audioLevel * 0.6);
+        col *= (0.6 + 0.4 * occ);
+
+        float fog = exp(-0.2 * (t - 3.0));
+        col = mix(bgColor, col, fog);
+        break;
+      }
+      t += d;
+      if (t > 10.0) break;
+    }
+
+    col *= 1.05 - length(uv) * 0.15;
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.04; // フィルムグレイン
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
 </script>
 </body>
 </html>
