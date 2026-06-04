@@ -62,6 +62,7 @@ const CONFIG = {
 };
 
 let myShader, cnv, bgTex, logoImg;
+let sceneG, postShader;              // 2パス: シーンをsceneGに描き、postで水滴合成
 let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
 let fpsAvg = 60, adjustCool = 0;
 let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
@@ -105,6 +106,7 @@ function applyDisplaySize(){
 function reflow(){
   const r = renderSize();
   resizeCanvas(r.w, r.h);
+  if (sceneG) sceneG.resizeCanvas(r.w, r.h);
   applyDisplaySize();
 }
 
@@ -152,8 +154,13 @@ function setup(){
   const r = renderSize();
   cnv = createCanvas(r.w, r.h, WEBGL);
   applyDisplaySize();
-  myShader = createShader(vs, fs);
   noStroke();
+  // 2パス: シーンはオフスクリーン(sceneG)に描画 → mainで水滴レイヤー合成
+  sceneG = createGraphics(r.w, r.h, WEBGL);
+  sceneG.pixelDensity(1);
+  sceneG.noStroke();
+  myShader = sceneG.createShader(vs, fs);     // シーン(レイマーチ)
+  postShader = createShader(postVS, postFS);  // 後処理(水滴)
   buildBgTex();
   // Wix(親ページ)からスクロール位置を受け取りロゴを3D回転（無ければ自動回転）
   window.addEventListener('message', (e) => {
@@ -235,6 +242,8 @@ function draw(){
     logoRot = sin(millis() * 0.0004) * CONFIG.logoTiltMax * 0.5;
   }
 
+  // ===== パス1: シーンをオフスクリーン(sceneG)に描画 =====
+  sceneG.shader(myShader);
   myShader.setUniform('u_resolution', [float(width), float(height)]);
   myShader.setUniform('u_time', now / 1000.0);
   myShader.setUniform('u_mouse', [mx, my]);
@@ -256,11 +265,23 @@ function draw(){
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
   myShader.setUniform('u_core', CONFIG.coreSize);
-  myShader.setUniform('u_drops', dropBuf);
   myShader.setUniform('u_cutDir', [cutDirX, cutDirY]);
   myShader.setUniform('u_cutAmt', cutAmt);
   myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
+  sceneG.beginShape();
+  sceneG.vertex(-1, -1, 0, 0, 0);
+  sceneG.vertex( 1, -1, 0, 1, 0);
+  sceneG.vertex( 1,  1, 0, 1, 1);
+  sceneG.vertex(-1,  1, 0, 0, 1);
+  sceneG.endShape(CLOSE);
 
+  // ===== パス2: 水滴レイヤー(シーンを実際に屈折) =====
+  shader(postShader);
+  postShader.setUniform('u_scene', sceneG);
+  postShader.setUniform('u_resolution', [float(width), float(height)]);
+  postShader.setUniform('u_time', now / 1000.0);
+  postShader.setUniform('u_drops', dropBuf);
+  postShader.setUniform('u_sceneFlip', 1.0);
   beginShape();
   vertex(-1, -1, 0, 0, 0);
   vertex( 1, -1, 0, 1, 0);
@@ -367,6 +388,57 @@ const vs = `
   void main(){ gl_Position = vec4(aPosition, 1.0); }
 `;
 
+/* 後処理(水滴): シーンテクスチャを実際に屈折させる */
+const postVS = `
+  attribute vec3 aPosition;
+  void main(){ gl_Position = vec4(aPosition, 1.0); }
+`;
+const postFS = `
+  precision highp float;
+  uniform sampler2D u_scene;
+  uniform vec2  u_resolution;
+  uniform float u_time;
+  uniform vec4  u_drops[30];
+  uniform float u_sceneFlip;
+
+  float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+  vec3 scn(vec2 uv){
+    uv = clamp(uv, 0.0, 1.0);
+    if (u_sceneFlip > 0.5) uv.y = 1.0 - uv.y;
+    return texture2D(u_scene, uv).rgb;
+  }
+
+  void main(){
+    vec2 suv = gl_FragCoord.xy / u_resolution.xy;
+    vec3 col = scn(suv);
+    float asp = u_resolution.x / u_resolution.y;
+
+    // 前面ガラスの水滴: シーンそのものを反転拡大して屈折(Apple天気的)
+    for (int i = 0; i < 30; i++){
+      vec4 dp = u_drops[i];
+      if (dp.w <= 0.001) continue;
+      vec2 diff = suv - dp.xy; diff.x *= asp;
+      float r = dp.z;
+      float dist = length(diff);
+      if (dist > r) continue;
+      float h = dist / r;
+      float cz = sqrt(max(0.0, 1.0 - h * h));
+      vec2 invUV = dp.xy - (suv - dp.xy) * 1.8;                 // 反転拡大
+      vec2 edgeOff = (diff / r) * (1.0 - cz) * (r * 0.5); edgeOff.x /= asp;
+      vec3 c = scn(invUV - edgeOff);
+      float rim = smoothstep(0.82, 0.95, h) * (1.0 - smoothstep(0.95, 1.0, h));
+      float hl  = 1.0 - smoothstep(0.0, 0.16 * r, length(diff - vec2(-0.30, 0.34) * r));
+      c += hl * 1.1;                                            // ハイライト
+      c += rim * 0.45;                                          // 全反射リム
+      c *= 1.0 - smoothstep(0.92, 1.0, h) * 0.55;               // 接地の暗縁
+      float mask = smoothstep(1.0, 0.95, h) * clamp(dp.w, 0.0, 1.0) * 0.85;
+      col = mix(col, c, mask);
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
 const fs = `
   precision highp float;
   uniform float u_time;
@@ -390,7 +462,6 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
-  uniform vec4  u_drops[30];  // 前面ガラスの水滴 (x,y,半径,寿命)
   uniform vec2  u_cutDir;     // 切断面の法線(スワイプで水を切る)
   uniform float u_cutAmt;     // 切れ目の深さ(時間で塞がる)
   uniform float u_cutWidth;   // 切れ目の最大幅
@@ -597,31 +668,6 @@ const fs = `
     }
 
     // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
-
-    // ===== 前面ガラス(モニター)の水滴: 隠し味。背後を反転拡大して映す本物のレンズ感 =====
-    float asp = u_resolution.x / u_resolution.y;
-    for (int i = 0; i < 30; i++){
-      vec4 dp = u_drops[i];
-      if (dp.w <= 0.001) continue;
-      vec2 diff = suv - dp.xy; diff.x *= asp;
-      float r = dp.z;
-      float dist = length(diff);
-      if (dist > r) continue;
-      float h = dist / r;
-      // 水滴レンズ: 背後を上下反転＋拡大して映す（縁ほど球面屈折を強める）
-      float cz = sqrt(max(0.0, 1.0 - h * h));
-      vec2 invUV = dp.xy - (suv - dp.xy) * 1.8;                 // 反転拡大
-      vec2 edgeOff = (diff / r) * (1.0 - cz) * (r * 0.5); edgeOff.x /= asp;
-      vec3 c = background(invUV - edgeOff);
-      // 細く鋭い全反射リム + 小さなハイライト + 接地の暗縁
-      float rim = smoothstep(0.82, 0.95, h) * (1.0 - smoothstep(0.95, 1.0, h));
-      float hl  = 1.0 - smoothstep(0.0, 0.16 * r, length(diff - vec2(-0.30, 0.34) * r));
-      c += hl * 1.1;
-      c += rim * 0.5;
-      c *= 1.0 - smoothstep(0.92, 1.0, h) * 0.6;
-      float mask = smoothstep(1.0, 0.95, h) * clamp(dp.w, 0.0, 1.0) * 0.8; // 少し透過＝隠し味
-      col = mix(col, c, mask);
-    }
 
     // 階調: フィルミック(ACES) + ビネット + グレイン
     col = aces(col * 1.06);
