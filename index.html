@@ -66,6 +66,9 @@ let fpsAvg = 60, adjustCool = 0;
 let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
 let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
 let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロール連動(postMessage)
+const MAXDROPS = 30;                 // 前面ガラスの水滴
+let drops = [];                      // {x,y,r,life,vy}
+let dropBuf = new Float32Array(MAXDROPS * 4);
 let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
@@ -218,6 +221,7 @@ function draw(){
   targetAudioLevel *= 0.95;
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
   fine *= 0.996;   // 細かさはゆっくり戻る（飛散がしばらく滞留＝戻りが遅い）
+  updateDrops();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
   scrollProg += (scrollTarget - scrollProg) * 0.08;
@@ -249,6 +253,7 @@ function draw(){
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
   myShader.setUniform('u_core', CONFIG.coreSize);
+  myShader.setUniform('u_drops', dropBuf);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -283,7 +288,44 @@ function poke(px, py){
   const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど1.0
   fine = min(1.0, fine + 0.08 + rapid * 0.34);                     // 速いほど一気に細かく
   pulse(2.0 + rapid * 3.5, 0.8, 1.4 + rapid * 1.8);                // 速いほど激しく弾ける
+  spawnDrops(Math.floor(2 + rapid * 5), px / width, py / height);  // 前面ガラスに水滴が付く
   lastInteract = now;
+}
+
+/* 前面ガラスの水滴を発生（大小ランダム。大きいものは後で滴り落ちる） */
+function spawnDrops(n, cx, cy){
+  for (let i = 0; i < n; i++){
+    if (drops.length >= MAXDROPS) drops.shift();   // 古いものから入れ替え
+    const big = random() < 0.30;
+    drops.push({
+      x: constrain(cx + random(-0.28, 0.28), 0.03, 0.97),
+      y: constrain(cy + random(-0.22, 0.22), 0.03, 0.97),
+      r: big ? random(0.022, 0.05) : random(0.006, 0.018),
+      life: random(0.85, 1.0),
+      vy: 0,
+    });
+  }
+}
+
+/* 水滴の更新：小さい粒は表面張力で留まり、大きい粒は重力で滴り落ちる */
+function updateDrops(){
+  for (let k = drops.length - 1; k >= 0; k--){
+    const d = drops[k];
+    d.life -= 0.0035;
+    if (d.r > 0.02){ d.vy += 0.000018; d.y += d.vy; }  // 大粒：垂れる
+    else { d.y += 0.000008; }                          // 小粒：ほぼ静止
+    if (d.life <= 0 || d.y > 1.15) drops.splice(k, 1);
+  }
+  for (let i = 0; i < MAXDROPS; i++){
+    const o = i * 4;
+    if (i < drops.length){
+      const d = drops[i];
+      dropBuf[o] = d.x; dropBuf[o+1] = d.y; dropBuf[o+2] = d.r;
+      dropBuf[o+3] = constrain(d.life, 0, 1);
+    } else {
+      dropBuf[o] = dropBuf[o+1] = dropBuf[o+2] = dropBuf[o+3] = 0;
+    }
+  }
 }
 function dragRotate(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
@@ -337,6 +379,7 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
+  uniform vec4  u_drops[30];  // 前面ガラスの水滴 (x,y,半径,寿命)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -367,7 +410,7 @@ const fs = `
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
     // 細かさ/興奮で融合を弱める → 連打でバラけて極小の飛沫へ
-    float blendK = mix(0.38, 0.03, clamp(u_audioLevel * 0.18 + u_fine * 1.0, 0.0, 1.0));
+    float blendK = mix(0.38, 0.09, clamp(u_audioLevel * 0.18 + u_fine * 1.0, 0.0, 1.0)); // 散っても少し繋いで糸を引く
     vec3 prevPos = u_directions[27];
 
     for (int i = 0; i < 28; i++){
@@ -452,6 +495,18 @@ const fs = `
     return texture2D(u_bg, uv).rgb;
   }
 
+  // 任意のスクリーン座標での背景(実像+紙)。画面の水滴レンズが参照する
+  vec3 background(vec2 s){
+    vec2 uvc = (s * 2.0 - 1.0) * (u_resolution / min(u_resolution.x, u_resolution.y));
+    vec3 ro2 = vec3(0.0, 0.0, 4.6);
+    vec3 rd2 = normalize(vec3(uvc / u_scale, -2.2));
+    float tp = (u_planeZ - ro2.z) / min(rd2.z, -0.001);
+    vec3 qq = ro2 + rd2 * tp;
+    vec2 luv = vec2(qq.x / (2.0 * u_logoHalfW), qq.y / (2.0 * u_logoHalfH)) + 0.5;
+    vec3 pap = vec3(0.047) + vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + s.x * 2.5 - s.y * 2.0));
+    return max(pap, bgAt(luv));
+  }
+
   void main(){
     vec2 uv  = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
     vec2 suv = gl_FragCoord.xy / u_resolution.xy;   // 0..1 スクリーン座標
@@ -460,12 +515,7 @@ const fs = `
     vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
 
     // 実像は常に背後にある。休止時は液体が全面を覆うので見えず、飛び散って液体が無くなると見える
-    vec3 paper = vec3(0.047);
-    paper += vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + suv.x * 2.5 - suv.y * 2.0));
-    float tp0 = (u_planeZ - ro.z) / min(rd.z, -0.001);
-    vec3 q0 = ro + rd * tp0;
-    vec2 luv0 = vec2(q0.x / (2.0 * u_logoHalfW), q0.y / (2.0 * u_logoHalfH)) + 0.5;
-    vec3 bg = max(paper, bgAt(luv0));
+    vec3 bg = background(suv);
     vec3 col = bg;
 
     float nearest = 1e9;
@@ -528,6 +578,29 @@ const fs = `
     }
 
     // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
+
+    // ===== 前面ガラス(モニター)の水滴: 飛び散ると付着し、滴り落ちるまで滞留 =====
+    float asp = u_resolution.x / u_resolution.y;
+    for (int i = 0; i < 30; i++){
+      vec4 dp = u_drops[i];
+      if (dp.w <= 0.001) continue;
+      vec2 diff = suv - dp.xy; diff.x *= asp;
+      float r = dp.z;
+      float dist = length(diff);
+      if (dist > r) continue;
+      float h = dist / r;
+      vec2 dir = diff / max(dist, 1e-4);
+      // 球レンズ屈折: 縁ほど大きく曲げ、背景を反転気味に拡大
+      vec2 off = dir * pow(h, 1.6) * r * 1.4; off.x /= asp;
+      vec3 c = background(dp.xy - off);
+      // 上方の小さなハイライト点
+      float hl = 1.0 - smoothstep(0.0, 0.30 * r, length(diff - vec2(-0.30, 0.34) * r));
+      c += vec3(1.0) * hl * 0.9;
+      c *= 1.0 - smoothstep(0.80, 1.0, h) * 0.55;   // 縁を暗く(接地リング)
+      c += smoothstep(0.90, 1.0, h) * 0.22;          // 外周の明るいふち
+      float mask = smoothstep(1.0, 0.90, h) * clamp(dp.w, 0.0, 1.0);
+      col = mix(col, c, mask);
+    }
 
     // 階調: フィルミック(ACES) + ビネット + グレイン
     col = aces(col * 1.06);
