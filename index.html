@@ -53,8 +53,9 @@ const CONFIG = {
   formScale:  1.0,   // 全体倍率の手動調整
   // 屈折させる対象（ロゴ画像）。空ならテキスト(bgLines)で代用
   logoUrl:    LOGO_URI,   // ロゴをHTMLに焼き込み（外部ファイル不要・どこでも動く）
-  logoSize:   0.42,          // 画面短辺に対するロゴの大きさ
+  logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
+  coreSize:   0.50,          // 中央コアの半径（休止時にロゴを覆う大玉。大きいほど覆う）
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -227,8 +228,8 @@ function draw(){
     targetRotationY += 0.0014;
     const breath = 0.50 + 0.32 * sin(now * 0.0011);
     if (targetAudioLevel < breath) targetAudioLevel = breath;
-    tmx = sin(now * 0.00028) * 0.34;
-    tmy = cos(now * 0.00037) * 0.30;
+    tmx = sin(now * 0.00028) * 0.12;   // ロゴを覆い続けるよう動きは控えめ
+    tmy = cos(now * 0.00037) * 0.10;
     if (frameCount % 220 === 0) pulse(1.7, 1.6, 2.8);
   }
 
@@ -274,6 +275,7 @@ function draw(){
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
+  myShader.setUniform('u_core', CONFIG.coreSize);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -358,6 +360,7 @@ const fs = `
   uniform float u_flip;       // 背景テクスチャ上下反転
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
+  uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -407,6 +410,10 @@ const fs = `
       d = smin(d, drop, blendK);
       prevPos = currentDir;
     }
+    // 中央コア: 休止時はロゴを覆う大玉。連打(fine)で縮んで割れ、素ロゴが覗く
+    float coreR = u_core * (1.0 - 0.85 * u_fine);
+    float core = length(p - mousePos) - coreR;
+    d = smin(d, core, 0.40);
     // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
     d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.007 * u_fine;
     return d;
