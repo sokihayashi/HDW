@@ -16,54 +16,73 @@
 <body>
 <script>
 /* =========================================================
-   Hayashi Design Works — HYDRA (新規制作 / 別物 v2)
+   Hayashi Design Works — HYDRA (新規制作 / 別物 v3)
    ---------------------------------------------------------
-   SDFレイマーチングの液体生命体。触ると飛び散り、粘って戻る。
-   元ネタ: GENUARY 2026 "Resonant Hydra-morphic" を
-   サイトのヒーロー用に再設計。
-   ・スマホ縦・全画面 / タッチ主役（端末センサー・マイク不使用 = Wix対応）
-   ・スクロールを殺さない（縦=ページ送り, タップ=飛散, 横ドラッグ=回転）
-   ・低解像度バッファ→CSS拡大で軽量化
-   ・モノトーン + 差し色（飛び散った瞬間だけ色が灯る）
+   SDFレイマーチングの液体クローム生命体。触ると飛び散り粘って戻る。
+   元ネタ: GENUARY 2026 "Resonant Hydra-morphic" をヒーロー用に再設計。
+   v3の強化:
+   ・適応解像度（FPSを見て解像度を自動調整 = クッキリ かつ 60fps維持）
+   ・液体クロームのマテリアル（スペキュラ + 擬似環境反射 + フレネル）
+   ・スタジオ風グラデ背景 + ビネットで奥行き
+   ・差し色を意図的に（縁に常時うっすら / 飛散時に強く）
+   ・スマホ縦・全画面 / スクロールを殺さない / マイク・センサー不使用(Wix対応)
    ========================================================= */
 
 /* ===== CONFIG ===== */
 const CONFIG = {
-  accent: [0.20, 0.50, 1.0],   // 差し色(青)。朱:[1.0,0.28,0.18] 緑:[0.16,0.82,0.59]
-  renderMaxMobile: 480,        // スマホ時のレンダ最大辺(小さいほど軽い)
-  renderMaxDesktop: 760,
+  accent: [0.20, 0.55, 1.0],   // 差し色(青)。朱:[1.0,0.30,0.20] 緑:[0.16,0.85,0.60]
+  // 適応解像度の範囲（レンダ長辺px）
+  res: {
+    startMobile: 620,  startDesktop: 940,
+    maxMobile:   980,  maxDesktop:  1320,
+    min:         360,
+  },
 };
 
 let myShader, cnv;
-let RENDER_MAX = 700;
+let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
+let fpsAvg = 60, adjustCool = 0;
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
 let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
 let mx = 0, my = 0, tmx = 0, tmy = 0;                 // 生命体が向かう先(-1..1)
+let vmx = 0, vmy = 0;                                 // 速度(液体の慣性/揺り戻し)
+let pullX = 0, pullY = 0, tpullX = 0, tpullY = 0;     // 指で引いている向き
 let lastInteract = -99999;
 
 let numDrops = 16;
 let currentDirs = [], targetDirs = [], masses = [];
 
-/* ===== sizing: 低解像度で描いてCSSで全画面に引き伸ばす ===== */
+/* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
+function deviceCaps(){
+  const mob = min(windowWidth, windowHeight) < 700;
+  const start = mob ? CONFIG.res.startMobile : CONFIG.res.startDesktop;
+  let mx2  = mob ? CONFIG.res.maxMobile   : CONFIG.res.maxDesktop;
+  mx2 = min(mx2, max(windowWidth, windowHeight)); // 表示画素を超えて描かない
+  return { start, max: mx2 };
+}
 function renderSize(){
   const a = windowWidth / windowHeight;
   let w, h;
-  if (windowWidth >= windowHeight){ w = RENDER_MAX; h = Math.round(RENDER_MAX / a); }
-  else                            { h = RENDER_MAX; w = Math.round(RENDER_MAX * a); }
+  if (windowWidth >= windowHeight){ w = rmLong; h = Math.round(rmLong / a); }
+  else                            { h = rmLong; w = Math.round(rmLong * a); }
   return { w: max(2, w), h: max(2, h) };
 }
 function applyDisplaySize(){
   cnv.style('width',  windowWidth  + 'px');
   cnv.style('height', windowHeight + 'px');
 }
-function pickRenderMax(){
-  RENDER_MAX = (min(windowWidth, windowHeight) < 700) ? CONFIG.renderMaxMobile : CONFIG.renderMaxDesktop;
+function reflow(){
+  const r = renderSize();
+  resizeCanvas(r.w, r.h);
+  applyDisplaySize();
 }
 
 function setup(){
   pixelDensity(1);
-  pickRenderMax();
+  const c = deviceCaps();
+  rmMaxDev = c.max;
+  rmLong = min(c.start, rmMaxDev);
   const r = renderSize();
   cnv = createCanvas(r.w, r.h, WEBGL);
   applyDisplaySize();
@@ -77,10 +96,24 @@ function setup(){
   }
 }
 function windowResized(){
-  pickRenderMax();
-  const r = renderSize();
-  resizeCanvas(r.w, r.h);
-  applyDisplaySize();
+  const c = deviceCaps();
+  rmMaxDev = c.max;
+  rmLong = constrain(rmLong, CONFIG.res.min, rmMaxDev);
+  reflow();
+}
+
+/* ===== 適応解像度: FPSに応じてレンダ解像度を上下 ===== */
+function adaptResolution(){
+  fpsAvg = lerp(fpsAvg, frameRate(), 0.08);
+  if (adjustCool > 0){ adjustCool--; return; }
+  if (frameCount < 45) return;
+  if (fpsAvg < 45 && rmLong > CONFIG.res.min){
+    rmLong = max(CONFIG.res.min, floor(rmLong * 0.85));
+    reflow(); adjustCool = 45;
+  } else if (fpsAvg > 56 && rmLong < rmMaxDev){
+    rmLong = min(rmMaxDev, floor(rmLong * 1.08));
+    reflow(); adjustCool = 70;
+  }
 }
 
 /* ===== draw ===== */
@@ -91,20 +124,24 @@ function draw(){
   const now = millis();
   const idle = (now - lastInteract) > 2200;
   if (idle){
-    // 無操作時: ゆっくり自転しながら呼吸し、たまに静かに脈打つ
-    targetRotationY += 0.0016;
-    const breath = 0.45 + 0.30 * sin(now * 0.0012);
+    // 無操作時: ゆったり荘厳に自転・呼吸し、たまに大きく伸び上がる
+    targetRotationY += 0.0014;
+    const breath = 0.50 + 0.32 * sin(now * 0.0011);
     if (targetAudioLevel < breath) targetAudioLevel = breath;
-    tmx = sin(now * 0.00030) * 0.32;
-    tmy = cos(now * 0.00041) * 0.28;
-    if (frameCount % 260 === 0) pulse(1.4, 1.2, 2.2);
+    tmx = sin(now * 0.00028) * 0.34;
+    tmy = cos(now * 0.00037) * 0.30;
+    if (frameCount % 220 === 0) pulse(1.7, 1.6, 2.8);
   }
 
   // なめらかな追従（粘性のある動き）
   rotationX += (targetRotationX - rotationX) * 0.08;
   rotationY += (targetRotationY - rotationY) * 0.08;
-  mx += (tmx - mx) * 0.06;
-  my += (tmy - my) * 0.06;
+  // バネ＋減衰で「行き過ぎて揺り戻す」液体の慣性に（フリックすると body がスロッシュ）
+  vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
+  vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
+  // 指の引き（尾）— なぞっている間だけ立ち上がり、離すと戻る
+  pullX += (tpullX - pullX) * 0.25; tpullX *= 0.82;
+  pullY += (tpullY - pullY) * 0.25; tpullY *= 0.82;
   for (let i = 0; i < currentDirs.length; i++){
     currentDirs[i] += (targetDirs[i] - currentDirs[i]) * 0.05;
   }
@@ -119,6 +156,7 @@ function draw(){
   myShader.setUniform('u_directions', currentDirs);
   myShader.setUniform('u_masses', masses);
   myShader.setUniform('u_accent', CONFIG.accent);
+  myShader.setUniform('u_pull', [pullX, pullY]);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -126,9 +164,11 @@ function draw(){
   vertex( 1,  1, 0, 1, 1);
   vertex(-1,  1, 0, 0, 1);
   endShape(CLOSE);
+
+  adaptResolution();
 }
 
-/* ===== 飛散パルス（強さを引数で） ===== */
+/* ===== 飛散パルス ===== */
 function pulse(audio, lo, hi){
   targetAudioLevel = audio;
   for (let i = 0; i < numDrops; i++){
@@ -144,22 +184,28 @@ function pulse(audio, lo, hi){
 function poke(px, py){
   tmx = map(px, 0, width, -1.0, 1.0);
   tmy = map(py, 0, height, 1.0, -1.0);
-  pulse(4.0, 3.0, 5.0);
+  pulse(4.5, 3.0, 5.0);
   lastInteract = millis();
 }
 function dragRotate(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
-  // 横移動が主のときだけ回転（縦スワイプ＝スクロールを邪魔しない）
-  if (abs(dx) >= abs(dy)){
+  const sp = mag(dx, dy);
+  // body は指へ寄り（バネで遅れて追う）、引いた向きへ尾を引き、速いと表面が波立つ
+  tmx = map(mouseX, 0, width, -1.0, 1.0);
+  tmy = map(mouseY, 0, height, 1.0, -1.0);
+  if (sp > 3){
+    tpullX = constrain(dx *  0.020, -1.0, 1.0);
+    tpullY = constrain(dy * -0.020, -1.0, 1.0);
+    targetAudioLevel = max(targetAudioLevel, min(sp * 0.045, 2.4));
+  }
+  if (abs(dx) >= abs(dy)){            // 横移動が主のときだけ回転（縦=スクロール優先）
     targetRotationY += dx * 0.01;
     targetRotationX += dy * 0.01;
   }
-  tmx = map(mouseX, 0, width, -1.0, 1.0);
-  tmy = map(mouseY, 0, height, 1.0, -1.0);
   lastInteract = millis();
 }
 
-function touchStarted(){ poke(mouseX, mouseY); }           // returnしない
+function touchStarted(){ poke(mouseX, mouseY); }     // returnしない
 function touchMoved(){ dragRotate(); }
 function mousePressed(){ poke(mouseX, mouseY); }
 function mouseDragged(){ dragRotate(); }
@@ -180,6 +226,7 @@ const fs = `
   uniform vec3  u_directions[16];
   uniform float u_masses[16];
   uniform vec3  u_accent;
+  uniform vec2  u_pull;   // 指で引いている向き(尾を引く/body を引っ張る)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -204,7 +251,7 @@ const fs = `
 
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    float blendK = 0.4 + u_audioLevel * 0.4;
+    float blendK = 0.42 + u_audioLevel * 0.4;
     vec3 prevPos = u_directions[15];
 
     for (int i = 0; i < 16; i++){
@@ -213,12 +260,14 @@ const fs = `
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
       vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.2 + 0.2);
+      // 指で引いた向きへ body 全体が傾き、後ろの質点ほど尾を引く
+      parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 15.0));
 
       float t = u_time * (2.0 + m) + float(i) * 1.5;
-      parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.1;
+      parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
 
       float bounce = sin(u_time * 5.0 + float(i)) * 0.02 * (u_audioLevel + 0.5);
-      float pSize = 0.08 + (m * 0.04) + bounce;
+      float pSize = 0.105 + (m * 0.05) + bounce;
 
       float ripple = sin(length(p - parentPos) * 15.0 - u_time * 8.0) * 0.015 * u_audioLevel;
       float drop = length(p - parentPos) - (pSize + ripple);
@@ -238,47 +287,72 @@ const fs = `
     ));
   }
 
+  // 擬似環境（スタジオ照明）: 反射ベクトルの上下で明暗
+  vec3 env(vec3 r){
+    float y = r.y * 0.5 + 0.5;
+    vec3 floorC = vec3(0.16);
+    vec3 wallC  = vec3(0.55);
+    vec3 ceilC  = vec3(1.05);
+    vec3 c = mix(floorC, wallC, smoothstep(0.0, 0.55, y));
+    c = mix(c, ceilC, smoothstep(0.55, 1.0, y));
+    return c;
+  }
+
   void main(){
     vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
 
-    vec3 ro = vec3(0.0, 0.0, 5.0);
-    vec3 rd = normalize(vec3(uv, -2.0));
+    vec3 ro = vec3(0.0, 0.0, 4.6);
+    vec3 rd = normalize(vec3(uv, -2.2));
 
-    vec3 bgColor = vec3(0.55);
-    float bgGlow = 1.0 - length(uv) * 0.8;
-    vec3 col = bgColor * bgGlow;
+    // 背景: 上明るく下暗いスタジオ風グラデ + ビネット + 差し色のごく薄いヘイズ
+    float vert = gl_FragCoord.y / u_resolution.y;
+    vec3 bg = mix(vec3(0.30), vec3(0.66), vert);
+    bg *= 1.0 - 0.45 * length(uv * vec2(0.85, 0.7));
+    bg += u_accent * 0.015;
+    vec3 col = bg;
 
     float t = 0.0;
-    for (int i = 0; i < 70; i++){
+    for (int i = 0; i < 84; i++){
       vec3 p = ro + rd * t;
       float d = mapScene(p);
-      if (d < 0.001){
+      if (d < 0.0012){
         vec3 n = getNormal(p);
+        vec3 vd = -rd;
 
-        float rim = pow(1.0 + dot(rd, n), 3.0);
-        vec3 ld = normalize(vec3(1.0, 2.0, 3.0));
-        float diff = smoothstep(0.0, 1.0, max(dot(n, ld), 0.0));
-        float occ = clamp(mapScene(p + n * 0.15) / 0.15, 0.0, 1.0);
+        vec3 ld  = normalize(vec3(0.6, 1.0, 0.7));   // キーライト
+        vec3 ld2 = normalize(vec3(-0.7, -0.2, 0.4)); // フィル/バック
 
-        vec3 baseWhite = vec3(0.98);
-        vec3 shadowGray = vec3(0.42);
+        float diff  = max(dot(n, ld), 0.0);
+        float diff2 = max(dot(n, ld2), 0.0);
 
-        col = mix(shadowGray, baseWhite, diff);
-        col += rim * 0.5;
-        // 差し色: リムに、飛散して興奮しているほど強く灯る
-        col += rim * u_accent * (0.25 + u_audioLevel * 0.6);
-        col *= (0.6 + 0.4 * occ);
+        vec3 hlf = normalize(ld + vd);
+        float spec = pow(max(dot(n, hlf), 0.0), 90.0);     // 鋭いハイライト
 
-        float fog = exp(-0.2 * (t - 3.0));
-        col = mix(bgColor, col, fog);
+        float fres = pow(1.0 - max(dot(n, vd), 0.0), 3.0); // フレネル
+        vec3  refl = reflect(rd, n);
+        float occ  = clamp(mapScene(p + n * 0.15) / 0.15, 0.0, 1.0);
+
+        // 液体クローム
+        vec3 baseDark = vec3(0.28);
+        vec3 baseLite = vec3(0.97);
+        vec3 m = mix(baseDark, baseLite, smoothstep(0.0, 1.0, diff));
+        m += diff2 * 0.18;
+        m = mix(m, env(refl), 0.40);                  // 環境反射でヌメッと
+        m += spec * 1.4;                              // ハイライト
+        // 差し色: 縁に常時うっすら、飛散して興奮するほど強く
+        m += fres * (0.30 + u_accent * (0.55 + u_audioLevel * 0.9));
+        m *= (0.55 + 0.45 * occ);                     // AO
+
+        float fog = clamp(exp(-0.18 * (t - 3.0)), 0.0, 1.0);
+        col = mix(bg, m, fog);
         break;
       }
       t += d;
-      if (t > 10.0) break;
+      if (t > 11.0) break;
     }
 
-    col *= 1.05 - length(uv) * 0.15;
-    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.04; // フィルムグレイン
+    col *= 1.06 - length(uv) * 0.16;                  // 全体ビネット
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.035; // フィルムグレイン
     gl_FragColor = vec4(col, 1.0);
   }
 `;
