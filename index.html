@@ -58,6 +58,7 @@ const CONFIG = {
   logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
   coreSize:   0.62,          // 中央コアの半径（休止時にロゴを覆う大玉。logoWorldより大きく）
+  cutWidth:   0.17,          // スワイプで切る時の切れ目の最大幅
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -69,6 +70,7 @@ let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロー
 const MAXDROPS = 30;                 // 前面ガラスの水滴
 let drops = [];                      // {x,y,r,life,vy}
 let dropBuf = new Float32Array(MAXDROPS * 4);
+let cutDirX = 1, cutDirY = 0, cutAmt = 0; // スワイプの切断
 let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
@@ -221,6 +223,7 @@ function draw(){
   targetAudioLevel *= 0.95;
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
   fine *= 0.996;   // 細かさはゆっくり戻る（飛散がしばらく滞留＝戻りが遅い）
+  cutAmt *= 0.90;  // 切れ目はゆっくり塞がる（水が戻る）
   updateDrops();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
@@ -254,6 +257,9 @@ function draw(){
   myShader.setUniform('u_logoRot', logoRot);
   myShader.setUniform('u_core', CONFIG.coreSize);
   myShader.setUniform('u_drops', dropBuf);
+  myShader.setUniform('u_cutDir', [cutDirX, cutDirY]);
+  myShader.setUniform('u_cutAmt', cutAmt);
+  myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -288,33 +294,33 @@ function poke(px, py){
   const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど1.0
   fine = min(1.0, fine + 0.08 + rapid * 0.34);                     // 速いほど一気に細かく
   pulse(2.0 + rapid * 3.5, 0.8, 1.4 + rapid * 1.8);                // 速いほど激しく弾ける
-  spawnDrops(Math.floor(2 + rapid * 5), px / width, py / height);  // 前面ガラスに水滴が付く
+  spawnDrops(Math.floor(2 + rapid * 5), px / width, 1.0 - py / height);  // 前面ガラスに水滴(suv空間=下が0)
   lastInteract = now;
 }
 
-/* 前面ガラスの水滴を発生（大小ランダム。大きいものは後で滴り落ちる） */
+/* 前面ガラスの水滴を発生（cx,cyはシェーダのsuv空間=下が0。大小ランダム） */
 function spawnDrops(n, cx, cy){
   for (let i = 0; i < n; i++){
     if (drops.length >= MAXDROPS) drops.shift();   // 古いものから入れ替え
-    const big = random() < 0.30;
+    const big = random() < 0.28;
     drops.push({
       x: constrain(cx + random(-0.28, 0.28), 0.03, 0.97),
       y: constrain(cy + random(-0.22, 0.22), 0.03, 0.97),
-      r: big ? random(0.022, 0.05) : random(0.006, 0.018),
+      r: big ? random(0.018, 0.038) : random(0.005, 0.014),
       life: random(0.85, 1.0),
       vy: 0,
     });
   }
 }
 
-/* 水滴の更新：小さい粒は表面張力で留まり、大きい粒は重力で滴り落ちる */
+/* 水滴の更新：小さい粒は表面張力で留まり、大きい粒は重力で下へ滴る(suv.yを減らす=下) */
 function updateDrops(){
   for (let k = drops.length - 1; k >= 0; k--){
     const d = drops[k];
     d.life -= 0.0035;
-    if (d.r > 0.02){ d.vy += 0.000018; d.y += d.vy; }  // 大粒：垂れる
-    else { d.y += 0.000008; }                          // 小粒：ほぼ静止
-    if (d.life <= 0 || d.y > 1.15) drops.splice(k, 1);
+    if (d.r > 0.016){ d.vy += 0.000020; d.y -= d.vy; }  // 大粒：下へ垂れる
+    else { d.y -= 0.000006; }                           // 小粒：ほぼ静止
+    if (d.life <= 0 || d.y < -0.15) drops.splice(k, 1);
   }
   for (let i = 0; i < MAXDROPS; i++){
     const o = i * 4;
@@ -341,6 +347,11 @@ function dragRotate(){
   if (abs(dx) >= abs(dy)){            // 横移動が主のときだけ回転（控えめ・縦=スクロール優先）
     targetRotationY += dx * 0.004;
     targetRotationX += dy * 0.004;
+    if (sp > 8){                      // 速い横スワイプ＝水を切る（切断面はスワイプに直交）
+      const L = Math.hypot(dx, dy) || 1;
+      cutDirX = dy / L; cutDirY = dx / L;
+      cutAmt = Math.min(1.0, sp * 0.045);
+    }
   }
   lastInteract = millis();
 }
@@ -380,6 +391,9 @@ const fs = `
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
   uniform vec4  u_drops[30];  // 前面ガラスの水滴 (x,y,半径,寿命)
+  uniform vec2  u_cutDir;     // 切断面の法線(スワイプで水を切る)
+  uniform float u_cutAmt;     // 切れ目の深さ(時間で塞がる)
+  uniform float u_cutWidth;   // 切れ目の最大幅
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -449,6 +463,11 @@ const fs = `
     d = smin(d, core, 0.40);
     // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
     d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.007 * u_fine;
+    // スワイプで水を切る: 切断面に沿って薄いギャップを彫り左右に分離(時間で塞がる)
+    if (u_cutAmt > 0.001){
+      float gap = u_cutWidth * u_cutAmt - abs(dot(p.xy - mousePos.xy, u_cutDir));
+      d = max(d, gap);
+    }
     return d;
   }
 
@@ -589,16 +608,18 @@ const fs = `
       float dist = length(diff);
       if (dist > r) continue;
       float h = dist / r;
-      vec2 dir = diff / max(dist, 1e-4);
-      // 球レンズ屈折: 縁ほど大きく曲げ、背景を反転気味に拡大
-      vec2 off = dir * pow(h, 1.6) * r * 1.4; off.x /= asp;
-      vec3 c = background(dp.xy - off);
-      // 上方の小さなハイライト点
-      float hl = 1.0 - smoothstep(0.0, 0.30 * r, length(diff - vec2(-0.30, 0.34) * r));
-      c += vec3(1.0) * hl * 0.9;
-      c *= 1.0 - smoothstep(0.80, 1.0, h) * 0.55;   // 縁を暗く(接地リング)
-      c += smoothstep(0.90, 1.0, h) * 0.22;          // 外周の明るいふち
-      float mask = smoothstep(1.0, 0.90, h) * clamp(dp.w, 0.0, 1.0);
+      // 半球レンズの屈折: 縁ほど曲がって背景を拡大して見せる
+      float cz = sqrt(max(0.0, 1.0 - h * h));
+      vec2 refrOff = (diff / r) * (1.0 - cz) * (r * 1.1);
+      refrOff.x /= asp;
+      vec3 c = background(dp.xy + refrOff);
+      // ガラス感: 鋭いハイライト + 明るい細リム + 接地の暗い極縁
+      float hl  = 1.0 - smoothstep(0.0, 0.24 * r, length(diff - vec2(-0.26, 0.30) * r));
+      float rim = smoothstep(0.72, 1.0, h);
+      c += hl * (0.7 + cz * 0.5);                    // 上のきらめき
+      c += rim * 0.10;                               // 明るいふち
+      c *= 1.0 - smoothstep(0.90, 1.0, h) * 0.55;    // 極縁は暗い(接地)
+      float mask = smoothstep(1.0, 0.94, h) * clamp(dp.w, 0.0, 1.0);
       col = mix(col, c, mask);
     }
 
