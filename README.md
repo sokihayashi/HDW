@@ -1,36 +1,50 @@
 # HDW — Hayashi Design Works TOPグラフィック
 
-soki-hayashi.com のTOP（ヒーロー）に iframe で埋め込んでいる p5.js 製の生成アート。
+soki-hayashi.com のTOP（ヒーロー）に iframe で埋め込む p5.js 製のインタラクティブ生成アート。
 
 ## ファイル
 
 | ファイル | 内容 |
 |---|---|
-| `original.html` | 現行のグラフィック（雫＝円錐をランダムに積層していく版）。リファレンスとして保存。 |
-| `index.html` | 新規制作 v1。`original` の「雫の積層」を継承しつつ、ノイズ流れ場で渦巻く／自走する／呼吸するフェードを追加した進化版。 |
+| `index.html` | **現行の新作「INK」**。指でなぞると水中にインクが広がる、スマホ縦・タッチ前提のインタラクティブ作品。モノトーン＋差し色。 |
+| `original.html` | サイトに元々載っていた「雫の積層」グラフィック。リファレンスとして保存。 |
 
-## 操作（共通UI）
+## コンセプト（INK）
 
-- **左上のジョイスティック**: 角度＝Hue（色相）／半径＝Saturation（彩度）
-- **左下の ■/▶ ボタン**: アニメーションの一時停止 / 再生
+指でなぞった軌跡と速度に沿って、インクが水中に滲み広がる。
 
-## 仕組み（コア）
+- **タッチ主役（マルチタッチ）**。端末の傾きセンサーは使わない → 後述のWix制約下でも確実に動く
+- **モノトーン＋差し色**: 速い／新しいインクの芯だけ差し色（既定は青）が灯り、落ち着くと白へ
+- **軽量実装**: 重い流体シミュではなく「ソフトなスプライト＋ノイズ流れ場＋加算合成＋ゆっくり拡散」で滲みを再現
+- 無操作でも環境インクが漂い、ヒーローとして生き続ける
+- **ダブルタップでクリア**
 
-`droplet()`（旧 `ensui()`）が1粒の「雫」を描く。大きい円→小さい円を、少しずつ一方向へずらしながら重ねることで、雫／螺旋の形ができる。背景を毎フレーム消さずに積層することで密度のあるテクスチャになる。
+調整は `index.html` 冒頭の `CONFIG` だけ触ればOK（差し色・消える速さ・粒数・水流の強さ など）。
 
-`index.html` での主な変更点:
-- Perlinノイズの流れ場で雫の向きが場所ごとに渦を巻く
-- マウス操作が止まると自走モードに切り替わり、ゆっくり生き続ける
-- ごく薄いフェード（`breathe()`）で古い描画が静かに沈み、ベタ塗りで潰れない
+## Wix iframe の制約（リサーチ結果）
+
+Wixの「HTML埋め込み」は別オリジンの **sandbox付きiframe** 内で動くため:
+
+- ❌ **加速度・ジャイロ（DeviceOrientation/DeviceMotion）は使えない**
+  - クロスオリジンiframeでは親に `allow="accelerometer; gyroscope"` が必要だがWixでは付与不可
+  - iOS Safariの `DeviceOrientationEvent.requestPermission()` も第三者iframe内では実質不可（[WebKit #221399](https://bugs.webkit.org/show_bug.cgi?id=221399)）
+- ❌ 親ページDOMへのアクセス不可 / localStorage・Cookieは制限されがち / 音声自動再生・全画面は制限
+- ❌ iframeは固定サイズ（中身に合わせた自動リサイズなし）→ 枠内で完結する設計が前提
+- ✅ **タッチ/マルチタッチ・Canvas/WebGL・p5.js・requestAnimationFrame は問題なく動く**
+
+→ そのため本作は **タッチ（指）だけ** をインタラクションの主役にしている。
+
+参考: [Wix Studio: HTML iFrameの追加](https://support.wix.com/en/article/studio-editor-adding-an-html-iframe-element) /
+[Velo: HTML iframe要素](https://dev.wix.com/docs/develop-websites/articles/wix-editor-elements/other-elements/html-i-frame-element/working-with-the-html-iframe-element)
 
 ## プレビュー
 
-ローカルで開くだけで動く（CDNのp5.jsを読み込む）。
+ローカルで開くだけで動く（p5.jsはCDN読み込み）。スマホ実機で見たい場合は同一LAN内でサーバを立ててアクセス。
 
 ```bash
-# 例: 簡易サーバ
 python3 -m http.server 8000
-# → http://localhost:8000/index.html
+# PC:    http://localhost:8000/index.html
+# スマホ: http://<PCのIP>:8000/index.html
 ```
 
-本番では `index.html` を iframe で埋め込む想定。
+本番では `index.html` を Wix の HTML iframe に貼り付けて埋め込む。
