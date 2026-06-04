@@ -6,7 +6,7 @@
 <title>Hayashi Design Works — Hydra</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#8c8c8c;
+  html, body { margin:0; height:100%; overflow:hidden; background:#060608;
     -webkit-user-select:none; user-select:none; }
   /* pan-y: 縦スワイプはページスクロールへ。タップ/横ドラッグは作品が拾う */
   html, body, canvas { touch-action:pan-y; }
@@ -184,7 +184,7 @@ function pulse(audio, lo, hi){
 function poke(px, py){
   tmx = map(px, 0, width, -1.0, 1.0);
   tmy = map(py, 0, height, 1.0, -1.0);
-  pulse(4.5, 3.0, 5.0);
+  pulse(5.5, 3.5, 6.5);   // 連打=飛沫が大きく散る
   lastInteract = millis();
 }
 function dragRotate(){
@@ -251,7 +251,8 @@ const fs = `
 
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    float blendK = 0.42 + u_audioLevel * 0.4;
+    // 興奮するほど融合を弱める → 連打/フリックでバラけて飛沫になり、収まると再合体
+    float blendK = mix(0.40, 0.055, clamp(u_audioLevel * 0.22, 0.0, 1.0));
     vec3 prevPos = u_directions[15];
 
     for (int i = 0; i < 16; i++){
@@ -259,17 +260,17 @@ const fs = `
       float m = u_masses[i];
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.2 + 0.2);
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.40 + 0.2); // 興奮で遠くへ飛ぶ
       // 指で引いた向きへ body 全体が傾き、後ろの質点ほど尾を引く
       parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 15.0));
 
       float t = u_time * (2.0 + m) + float(i) * 1.5;
       parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
 
-      float bounce = sin(u_time * 5.0 + float(i)) * 0.02 * (u_audioLevel + 0.5);
+      float bounce = sin(u_time * 5.0 + float(i)) * 0.028 * (u_audioLevel + 0.5);
       float pSize = 0.105 + (m * 0.05) + bounce;
 
-      float ripple = sin(length(p - parentPos) * 15.0 - u_time * 8.0) * 0.015 * u_audioLevel;
+      float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.022 * u_audioLevel;
       float drop = length(p - parentPos) - (pSize + ripple);
 
       d = smin(d, drop, blendK);
@@ -287,14 +288,14 @@ const fs = `
     ));
   }
 
-  // 擬似環境（スタジオ照明）: 反射ベクトルの上下で明暗
+  // 擬似環境(スタジオ): ほぼ暗く、明るいソフトボックスの帯だけが鋭く映り込む = 締まったクローム
   vec3 env(vec3 r){
     float y = r.y * 0.5 + 0.5;
-    vec3 floorC = vec3(0.16);
-    vec3 wallC  = vec3(0.55);
-    vec3 ceilC  = vec3(1.05);
-    vec3 c = mix(floorC, wallC, smoothstep(0.0, 0.55, y));
-    c = mix(c, ceilC, smoothstep(0.55, 1.0, y));
+    float top = smoothstep(0.58, 0.70, y) * (1.0 - smoothstep(0.88, 1.0, y));
+    float low = smoothstep(0.14, 0.22, y) * (1.0 - smoothstep(0.30, 0.42, y));
+    vec3 c = vec3(0.025);
+    c += vec3(1.8) * top;     // 上のソフトボックス(白飛び)
+    c += vec3(0.45) * low;    // 下の弱い帯
     return c;
   }
 
@@ -304,18 +305,22 @@ const fs = `
     vec3 ro = vec3(0.0, 0.0, 4.6);
     vec3 rd = normalize(vec3(uv, -2.2));
 
-    // 背景: 上明るく下暗いスタジオ風グラデ + ビネット + 差し色のごく薄いヘイズ
+    // 背景: ほぼ黒。上にわずかな持ち上げ + 強いビネット + 差し色のごく薄いヘイズ
     float vert = gl_FragCoord.y / u_resolution.y;
-    vec3 bg = mix(vec3(0.30), vec3(0.66), vert);
-    bg *= 1.0 - 0.45 * length(uv * vec2(0.85, 0.7));
-    bg += u_accent * 0.015;
+    vec3 bg = mix(vec3(0.015), vec3(0.085), vert);
+    bg *= 1.0 - 0.65 * length(uv * vec2(0.8, 0.72));
+    bg += u_accent * 0.02;
     vec3 col = bg;
 
+    float nearest = 1e9;
+    bool hit = false;
     float t = 0.0;
     for (int i = 0; i < 84; i++){
       vec3 p = ro + rd * t;
       float d = mapScene(p);
+      nearest = min(nearest, d);
       if (d < 0.0012){
+        hit = true;
         vec3 n = getNormal(p);
         vec3 vd = -rd;
 
@@ -326,24 +331,30 @@ const fs = `
         float diff2 = max(dot(n, ld2), 0.0);
 
         vec3 hlf = normalize(ld + vd);
-        float spec = pow(max(dot(n, hlf), 0.0), 90.0);     // 鋭いハイライト
+        float spec = pow(max(dot(n, hlf), 0.0), 120.0);    // 鋭く小さいハイライト
 
         float fres = pow(1.0 - max(dot(n, vd), 0.0), 3.0); // フレネル
-        vec3  refl = reflect(rd, n);
         float occ  = clamp(mapScene(p + n * 0.15) / 0.15, 0.0, 1.0);
 
-        // 液体クローム
-        vec3 baseDark = vec3(0.28);
-        vec3 baseLite = vec3(0.97);
-        vec3 m = mix(baseDark, baseLite, smoothstep(0.0, 1.0, diff));
-        m += diff2 * 0.18;
-        m = mix(m, env(refl), 0.40);                  // 環境反射でヌメッと
-        m += spec * 1.4;                              // ハイライト
-        // 差し色: 縁に常時うっすら、飛散して興奮するほど強く
-        m += fres * (0.30 + u_accent * (0.55 + u_audioLevel * 0.9));
-        m *= (0.55 + 0.45 * occ);                     // AO
+        // 反射に色収差(分散): チャンネルごとに反射ベクトルを少しずらす
+        float disp = 0.012 + fres * 0.06;
+        vec3 nr = normalize(n + vec3( disp,  disp * 0.3, 0.0));
+        vec3 nb = normalize(n + vec3(-disp, -disp * 0.3, 0.0));
+        vec3 envCol = vec3(
+          env(reflect(rd, nr)).r,
+          env(reflect(rd, n )).g,
+          env(reflect(rd, nb)).b
+        );
 
-        float fog = clamp(exp(-0.18 * (t - 3.0)), 0.0, 1.0);
+        // 液体クローム(高コントラスト: 黒を入れる)
+        vec3 m = mix(vec3(0.03), vec3(0.85), smoothstep(0.0, 1.0, diff));
+        m += diff2 * 0.10;
+        m = mix(m, envCol, 0.50);                    // 鋭い映り込み
+        m += spec * 2.2;                             // 白飛びハイライト
+        m += fres * (0.25 + u_accent * (0.6 + u_audioLevel * 1.0)); // 差し色リム
+        m *= (0.5 + 0.5 * occ);                      // AO
+
+        float fog = clamp(exp(-0.16 * (t - 3.0)), 0.0, 1.0);
         col = mix(bg, m, fog);
         break;
       }
@@ -351,8 +362,18 @@ const fs = `
       if (t > 11.0) break;
     }
 
-    col *= 1.06 - length(uv) * 0.16;                  // 全体ビネット
-    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.035; // フィルムグレイン
+    // 疑似ブルーム: シルエットへの最接近距離からにじむ光(背景側に乗る)
+    if (!hit){
+      float glow = exp(-nearest * 7.0);
+      col += (vec3(0.4) + u_accent * 1.4) * glow * (0.20 + u_audioLevel * 0.7);
+    }
+
+    // 階調: S字コントラスト + 黒締め + ビネット + グレイン
+    col = clamp(col, 0.0, 1.0);
+    col = mix(col, smoothstep(0.0, 1.0, col), 0.55);  // コントラスト
+    col = max(col - 0.012, 0.0) * 1.04;               // 黒を締める
+    col *= 1.07 - length(uv) * 0.22;                  // ビネット
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.03; // フィルムグレイン
     gl_FragColor = vec4(col, 1.0);
   }
 `;
