@@ -50,8 +50,9 @@ const CONFIG = {
   // 液体のサイズ（画面サイズで可変）
   formScale:  1.0,   // 全体倍率の手動調整
   // 屈折させる対象（ロゴ画像）。空ならテキスト(bgLines)で代用
-  logoUrl:    '',    // 例: './logo.png' （透過PNG推奨）
-  logoSize:   0.42,  // 画面短辺に対するロゴの大きさ
+  logoUrl:    './hdw_logo.png',  // 透過PNG（無ければ bgLines のテキストにフォールバック）
+  logoSize:   0.42,          // 画面短辺に対するロゴの大きさ
+  logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -59,6 +60,7 @@ let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
 let fpsAvg = 60, adjustCool = 0;
 let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
 let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
+let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロール連動(postMessage)
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
 let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
@@ -155,6 +157,14 @@ function setup(){
   myShader = createShader(vs, fs);
   noStroke();
   buildBgTex();
+  // Wix(親ページ)からスクロール位置を受け取りロゴを3D回転（無ければ自動回転）
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (d && typeof d.hdwScroll === 'number'){
+      scrollTarget = constrain(d.hdwScroll, 0, 1);
+      lastScrollMsg = millis();
+    }
+  });
   for (let i = 0; i < numDrops; i++){
     const v = p5.Vector.random3D().mult(1.0);
     currentDirs.push(v.x, v.y, v.z);
@@ -216,6 +226,15 @@ function draw(){
   currentAudioLevel += (targetAudioLevel - currentAudioLevel) * 0.08;
   fine *= 0.990;   // 細かさはゆっくり戻る（連打で蓄積→徐々に再合体）
 
+  // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
+  scrollProg += (scrollTarget - scrollProg) * 0.08;
+  let logoRot;
+  if (millis() - lastScrollMsg < 2500){
+    logoRot = (scrollProg - 0.5) * 2.0 * CONFIG.logoTiltMax;
+  } else {
+    logoRot = sin(millis() * 0.0004) * CONFIG.logoTiltMax * 0.5;
+  }
+
   myShader.setUniform('u_resolution', [float(width), float(height)]);
   myShader.setUniform('u_time', now / 1000.0);
   myShader.setUniform('u_mouse', [mx, my]);
@@ -232,6 +251,7 @@ function draw(){
   myShader.setUniform('u_disp', CONFIG.dispersion);
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
+  myShader.setUniform('u_logoRot', logoRot);
 
   beginShape();
   vertex(-1, -1, 0, 0, 0);
@@ -315,6 +335,7 @@ const fs = `
   uniform float u_disp;       // 色収差の強さ
   uniform float u_flip;       // 背景テクスチャ上下反転
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
+  uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -389,10 +410,22 @@ const fs = `
     return c;
   }
 
-  // 背景テクスチャ(ロゴ/文字)を screen uv で参照。p5の2Dグラフィックは上下反転しがちなので u_flip で補正
+  // ロゴ平面のY軸3D回転（スクロール連動）: 透視投影の逆写像
+  vec2 logoUV(vec2 uv){
+    vec2 s = uv - 0.5;
+    float ca = cos(u_logoRot), sa = sin(u_logoRot);
+    float D = 2.2;
+    float X = s.x * D / (D * ca + s.x * sa);
+    float depth = D - X * sa;
+    float Y = s.y * depth / D;
+    return vec2(X, Y) + 0.5;
+  }
+
+  // 背景テクスチャ(ロゴ)を screen uv で参照。3D回転を適用し、p5の上下反転は u_flip で補正
   vec3 bgAt(vec2 uv){
-    uv = clamp(uv, 0.001, 0.999);
+    uv = logoUV(uv);
     if (u_flip > 0.5) uv.y = 1.0 - uv.y;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.047); // 枠外=背景色
     return texture2D(u_bg, uv).rgb;
   }
 
