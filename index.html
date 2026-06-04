@@ -46,7 +46,8 @@ const CONFIG = {
   bgPaper: 12,     // 背景色
   // ガラスの質感
   glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
-  lens:       0.12,  // 屈折で背景がズレる量(穏やかに＝ロゴが歪みすぎない)
+  planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
+  logoWorld:  0.58,  // ロゴ平面のworld半径(高さ)。大きいほどロゴが大きく映る
   dispersion: 0.012, // 色収差(分光)。縁だけ薄く＝上品に
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
@@ -64,6 +65,7 @@ let fpsAvg = 60, adjustCool = 0;
 let fine = 0;                         // 「細かさ」: 連打で増え、ゆっくり戻る
 let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
 let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロール連動(postMessage)
+let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
 
 let currentAudioLevel = 0.0, targetAudioLevel = 0.0; // 「興奮度」(飛散の強さ)
 let rotationX = 0, rotationY = 0, targetRotationX = 0, targetRotationY = 0;
@@ -98,47 +100,28 @@ function reflow(){
   const r = renderSize();
   resizeCanvas(r.w, r.h);
   applyDisplaySize();
-  buildBgTex();
 }
 
 /* 背景テクスチャ(=ロゴ/タイポ)を生成。ガラスがこれを屈折させる */
 function buildBgTex(){
   if (bgTex) bgTex.remove();
-  // 液体のレンダ解像度ではなく「表示解像度」でロゴを描く（引きずられて低解像度化しない）
-  const longD = min(max(windowWidth, windowHeight), 2048);
-  const a = width / height;
-  let bw, bh;
-  if (windowWidth >= windowHeight){ bw = longD; bh = round(longD / a); }
-  else                            { bh = longD; bw = round(longD * a); }
-  const g = createGraphics(max(2, bw), max(2, bh));
+  if (logoImg) logoAspect = logoImg.width / logoImg.height;
+  // テクスチャ全体=ロゴ（uv 0..1 がロゴ境界）。屈折で「平面」として参照する
+  const texH = 1280;
+  const texW = max(2, round(texH * logoAspect));
+  const g = createGraphics(texW, texH);
   g.pixelDensity(1);
   g.background(CONFIG.bgPaper);
   g.noStroke();
   if (logoImg){
-    // ロゴ画像を中央に（液体がこれを屈折させる）
-    const s = min(g.width, g.height) * CONFIG.logoSize;
-    const r = logoImg.width / logoImg.height;
-    let w2 = s, h2 = s / r;
-    if (r < 1){ h2 = s; w2 = s * r; }
-    g.imageMode(CENTER);
-    g.image(logoImg, g.width / 2, g.height / 2, w2, h2);
+    g.image(logoImg, 0, 0, texW, texH);
   } else {
-    // フォールバック: テキストを描く
     g.fill(CONFIG.bgInk);
     g.textFont('Helvetica');
     g.textStyle(BOLD);
-    g.textAlign(LEFT, TOP);
-    const mgn = g.width * 0.06;
-    const size = g.height * 0.155;
-    g.textSize(size);
-    let y = g.height * 0.07;
-    for (let i = 0; i < CONFIG.bgLines.length; i++){
-      g.text(CONFIG.bgLines[i], mgn, y);
-      y += size * 0.92;
-    }
-    g.textStyle(NORMAL);
-    g.textSize(max(10, g.height * 0.016));
-    g.text(CONFIG.bgFoot, mgn, g.height * 0.95);
+    g.textAlign(CENTER, CENTER);
+    g.textSize(texH * 0.16);
+    g.text('HDW', texW / 2, texH / 2);
   }
   bgTex = g;
 }
@@ -256,7 +239,9 @@ function draw(){
   myShader.setUniform('u_fine', fine);
   myShader.setUniform('u_bg', bgTex);
   myShader.setUniform('u_glassTint', CONFIG.glassTint);
-  myShader.setUniform('u_lens', CONFIG.lens);
+  myShader.setUniform('u_planeZ', CONFIG.planeZ);
+  myShader.setUniform('u_logoHalfH', CONFIG.logoWorld);
+  myShader.setUniform('u_logoHalfW', CONFIG.logoWorld * logoAspect);
   myShader.setUniform('u_disp', CONFIG.dispersion);
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
@@ -341,7 +326,9 @@ const fs = `
   uniform float u_fine;       // 細かさ(連打で増える)
   uniform sampler2D u_bg;     // 背景テクスチャ(ロゴ/タイポ)
   uniform float u_glassTint;  // ガラスの透け具合
-  uniform float u_lens;       // 屈折の強さ
+  uniform float u_planeZ;     // ロゴ平面の奥行き
+  uniform float u_logoHalfW;  // ロゴ平面の半幅(world)
+  uniform float u_logoHalfH;  // ロゴ平面の半高(world)
   uniform float u_disp;       // 色収差の強さ
   uniform float u_flip;       // 背景テクスチャ上下反転
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
@@ -473,14 +460,16 @@ const fs = `
         float spec = pow(max(dot(n, hlf), 0.0), 90.0);      // 1点の上品なハイライト
         float fres = pow(1.0 - max(dot(n, vd), 0.0), 4.0);  // 縁を引き締める
 
-        // 屈折: 背後のロゴがレンズ越しに「読める程度」に歪む。色収差は縁だけ薄く
+        // 屈折: 背後のロゴ"平面"へ屈折レイを飛ばして交差＝物理的に1枚の連続した歪み像
         vec3 rdir = refract(rd, n, 0.72);
-        vec2 base = suv + rdir.xy * u_lens;
-        float dsp = u_disp * fres;       // 分光は縁(fres)のみ＝上品
+        float tp = (u_planeZ - p.z) / min(rdir.z, -0.001);
+        vec3 q = p + rdir * tp;
+        vec2 luv = vec2(q.x / (2.0 * u_logoHalfW), q.y / (2.0 * u_logoHalfH)) + 0.5;
+        float dsp = u_disp * fres;       // 分光は縁(fres)だけ＝上品
         vec3 refr = vec3(
-          bgAt(base + vec2(dsp, 0.0)).r,
-          bgAt(base).g,
-          bgAt(base - vec2(dsp, 0.0)).b
+          bgAt(luv + vec2(dsp, 0.0)).r,
+          bgAt(luv).g,
+          bgAt(luv - vec2(dsp, 0.0)).b
         );
         refr *= u_glassTint;
 
