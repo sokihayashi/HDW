@@ -33,11 +33,11 @@ const LOGO_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAwkAAANgCAYAAABn
 
 const CONFIG = {
   accent: [0.20, 0.55, 1.0],   // 差し色(青)。朱:[1.0,0.30,0.20] 緑:[0.16,0.85,0.60]
-  // 適応解像度の範囲（レンダ長辺px）— 文字を読ませたいので下限を上げ気味
+  // 適応解像度の範囲（レンダ長辺px）— ロゴを綺麗に見せたいので高め
   res: {
-    startMobile: 660,  startDesktop: 1000,
-    maxMobile:   1040, maxDesktop:  1360,
-    min:         500,
+    startMobile: 820,  startDesktop: 1280,
+    maxMobile:   1280, maxDesktop:  1900,
+    min:         680,
   },
   // 背景に置く文字（= ガラスが屈折させる。ロゴ/タイポとの関わり）
   bgLines: ['HAYASHI', 'DESIGN', 'WORKS'],
@@ -45,9 +45,9 @@ const CONFIG = {
   bgInk:   238,    // 文字色 (0-255 グレースケール)
   bgPaper: 12,     // 背景色
   // ガラスの質感
-  glassTint:  0.55,  // 透け具合 (1.0=クリアガラス, 小さいほど黒い艶ガラス=YouFab風)
-  lens:       0.22,  // 屈折で背景がズレる量(レンズの強さ)
-  dispersion: 0.05,  // 色収差(分光)の強さ
+  glassTint:  0.80,  // 透け具合 (1.0=クリア)。上げてロゴが読めるように
+  lens:       0.12,  // 屈折で背景がズレる量(穏やかに＝ロゴが歪みすぎない)
+  dispersion: 0.012, // 色収差(分光)。縁だけ薄く＝上品に
   flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
   // 液体のサイズ（画面サイズで可変）
   formScale:  1.0,   // 全体倍率の手動調整
@@ -71,7 +71,7 @@ let vmx = 0, vmy = 0;                                 // 速度(液体の慣性/
 let pullX = 0, pullY = 0, tpullX = 0, tpullY = 0;     // 指で引いている向き
 let lastInteract = -99999;
 
-let numDrops = 16;
+let numDrops = 22;
 let currentDirs = [], targetDirs = [], masses = [];
 
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
@@ -103,7 +103,13 @@ function reflow(){
 /* 背景テクスチャ(=ロゴ/タイポ)を生成。ガラスがこれを屈折させる */
 function buildBgTex(){
   if (bgTex) bgTex.remove();
-  const g = createGraphics(width, height);
+  // 液体のレンダ解像度ではなく「表示解像度」でロゴを描く（引きずられて低解像度化しない）
+  const longD = min(max(windowWidth, windowHeight), 2048);
+  const a = width / height;
+  let bw, bh;
+  if (windowWidth >= windowHeight){ bw = longD; bh = round(longD / a); }
+  else                            { bh = longD; bw = round(longD * a); }
+  const g = createGraphics(max(2, bw), max(2, bh));
   g.pixelDensity(1);
   g.background(CONFIG.bgPaper);
   g.noStroke();
@@ -326,8 +332,8 @@ const fs = `
   uniform vec2  u_mouse;
   uniform float u_audioLevel;
   uniform vec2  u_rotation;
-  uniform vec3  u_directions[16];
-  uniform float u_masses[16];
+  uniform vec3  u_directions[22];
+  uniform float u_masses[22];
   uniform vec3  u_accent;
   uniform vec2  u_pull;       // 指で引いている向き(尾を引く/body を引っ張る)
   uniform float u_fine;       // 細かさ(連打で増える)
@@ -362,33 +368,33 @@ const fs = `
 
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    // 細かさ/興奮で融合を弱める → 連打でバラけて細かくなり、収まると再合体
-    float blendK = mix(0.40, 0.04, clamp(u_audioLevel * 0.18 + u_fine * 0.95, 0.0, 1.0));
-    vec3 prevPos = u_directions[15];
+    // 細かさ/興奮で融合を弱める → 連打でバラけて極小の飛沫へ
+    float blendK = mix(0.38, 0.03, clamp(u_audioLevel * 0.18 + u_fine * 1.0, 0.0, 1.0));
+    vec3 prevPos = u_directions[21];
 
-    for (int i = 0; i < 16; i++){
+    for (int i = 0; i < 22; i++){
       vec3 currentDir = u_directions[i];
       float m = u_masses[i];
 
       vec3 targetPos = mix(currentDir, prevPos, 0.2);
-      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2);
-      // 指で引いた向きへ body 全体が傾き、後ろの質点ほど尾を引く
-      parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 15.0));
+      // 細かいほど外へ広がって飛び散る
+      vec3 parentPos = mousePos + targetPos * (u_audioLevel * 0.22 + 0.2 + u_fine * 0.6);
+      parentPos.xy -= u_pull * (0.10 + 0.50 * (float(i) / 21.0));
 
       float t = u_time * (2.0 + m) + float(i) * 1.5;
       parentPos += vec3(sin(t), cos(t * 0.8), sin(t * 1.2)) * 0.13;
 
       float bounce = sin(u_time * 5.0 + float(i)) * 0.028 * (u_audioLevel + 0.5);
-      float pSize = (0.105 + (m * 0.05) + bounce) * (1.0 - 0.5 * u_fine); // 細かいほど小さく
+      float pSize = (0.10 + (m * 0.045) + bounce) * (1.0 - 0.75 * u_fine); // 細かいほど極小に
 
-      float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.022 * u_audioLevel;
+      float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.02 * u_audioLevel;
       float drop = length(p - parentPos) - (pSize + ripple);
 
       d = smin(d, drop, blendK);
       prevPos = currentDir;
     }
-    // 細かさ: 高周波で表面を刻んで霧化させる（連打でどんどん細かく）
-    d += sin(p.x * 24.0) * sin(p.y * 24.0) * sin(p.z * 24.0) * 0.013 * u_fine;
+    // 細かさ: 高周波で表面を砕いて霧化（数え切れない飛沫へ）
+    d += (sin(p.x * 33.0) * sin(p.y * 31.0) * sin(p.z * 35.0)) * 0.011 * u_fine;
     return d;
   }
 
@@ -407,8 +413,8 @@ const fs = `
     float top = smoothstep(0.58, 0.70, y) * (1.0 - smoothstep(0.88, 1.0, y));
     float low = smoothstep(0.14, 0.22, y) * (1.0 - smoothstep(0.30, 0.42, y));
     vec3 c = vec3(0.025);
-    c += vec3(1.8) * top;     // 上のソフトボックス(白飛び)
-    c += vec3(0.45) * low;    // 下の弱い帯
+    c += vec3(1.25) * top;    // 上のソフトボックス(控えめ)
+    c += vec3(0.35) * low;    // 下の弱い帯
     return c;
   }
 
@@ -453,34 +459,27 @@ const fs = `
         vec3 n  = getNormal(p);
         vec3 vd = -rd;
 
-        vec3 hlf  = normalize(normalize(vec3(0.6, 1.0, 0.7)) + vd);
-        float spec = pow(max(dot(n, hlf), 0.0), 120.0);     // 鋭いハイライト
-        float fres = pow(1.0 - max(dot(n, vd), 0.0), 3.0);  // フレネル(縁ほど反射)
+        vec3 hlf  = normalize(normalize(vec3(0.5, 0.9, 0.8)) + vd);
+        float spec = pow(max(dot(n, hlf), 0.0), 90.0);      // 1点の上品なハイライト
+        float fres = pow(1.0 - max(dot(n, vd), 0.0), 4.0);  // 縁を引き締める
 
-        // ガラスの屈折: 背後の文字がレンズ越しに歪む + 色収差(分光)
-        vec3 rdir = refract(rd, n, 0.66);
+        // 屈折: 背後のロゴがレンズ越しに「読める程度」に歪む。色収差は縁だけ薄く
+        vec3 rdir = refract(rd, n, 0.72);
         vec2 base = suv + rdir.xy * u_lens;
-        float dsp = u_disp * (0.4 + fres);
+        float dsp = u_disp * fres;       // 分光は縁(fres)のみ＝上品
         vec3 refr = vec3(
           bgAt(base + vec2(dsp, 0.0)).r,
           bgAt(base).g,
           bgAt(base - vec2(dsp, 0.0)).b
         );
-        refr *= u_glassTint;            // 黒い艶ガラスの吸収
+        refr *= u_glassTint;
 
-        // 反射: スタジオ照明の鋭い帯（色収差つき）
-        float ed = 0.012 + fres * 0.05;
-        vec3 nr = normalize(n + vec3( ed,  ed * 0.3, 0.0));
-        vec3 nb = normalize(n + vec3(-ed, -ed * 0.3, 0.0));
-        vec3 envCol = vec3(
-          env(reflect(rd, nr)).r,
-          env(reflect(rd, n )).g,
-          env(reflect(rd, nb)).b
-        );
+        // 反射: 控えめな映り込み（分光なし）
+        vec3 envCol = env(reflect(rd, n));
 
-        vec3 glass = mix(refr, envCol, fres);                    // 中心=屈折, 縁=反射
-        glass += spec * 2.4;                                     // 白飛びハイライト
-        glass += fres * u_accent * (0.25 + u_audioLevel * 0.9);  // 差し色リム
+        vec3 glass = mix(refr, envCol, fres * 0.65);             // 縁にだけ上品な反射
+        glass += spec * 1.4;                                     // ハイライト
+        glass += fres * (vec3(0.10) + u_accent * 0.08);          // 縁はほぼ白＋ごく僅かな差し色
 
         float fog = clamp(exp(-0.16 * (t - 3.0)), 0.0, 1.0);
         col = mix(bg, glass, fog);
@@ -490,10 +489,10 @@ const fs = `
       if (t > 11.0) break;
     }
 
-    // 疑似ブルーム: シルエットへにじむ光（背景の文字に乗る）
+    // 疑似ブルーム: シルエットへごく控えめに滲む光
     if (!hit){
-      float glow = exp(-nearest * 7.0);
-      col += (vec3(0.35) + u_accent * 1.4) * glow * (0.18 + u_audioLevel * 0.7);
+      float glow = exp(-nearest * 9.0);
+      col += (vec3(0.20) + u_accent * 0.40) * glow * (0.10 + u_audioLevel * 0.5);
     }
 
     // 階調: S字コントラスト + ビネット + グレイン
