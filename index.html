@@ -315,13 +315,14 @@ function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃�
 
 /* ===== interaction（スクロールは殺さない = preventDefaultしない） ===== */
 function poke(px, py){
-  tmx = map(px, 0, width, -1.0, 1.0);
-  tmy = map(py, 0, height, 1.0, -1.0);
+  const tx = map(px, 0, width, -1.0, 1.0);
+  const ty = map(py, 0, height, 1.0, -1.0);
   const now = millis();
   const dt = now - lastTap; lastTap = now;
   const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど強い
-  // 液体から遠い所をタップしても弾けないように、近接度でゲート
-  const prox = constrain(1.0 - Math.hypot(tmx - mx, tmy - my) * 1.0, 0.0, 1.0);
+  // 中央の液体(mx,my)から離れた"空タップ"は完全に無反応
+  const prox = constrain(1.0 - Math.hypot(tx - mx, ty - my) * 1.6, 0.0, 1.0);
+  if (prox <= 0.02) return;
   impulseTap((0.06 + rapid * 0.12) * prox);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
@@ -329,8 +330,6 @@ function poke(px, py){
 function swipe(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
   const sp = mag(dx, dy);
-  tmx = map(mouseX, 0, width, -1.0, 1.0);
-  tmy = map(mouseY, 0, height, 1.0, -1.0);
   // 速い横スワイプ＝水を切る。瞬間ギャップで綺麗にスライス＋両側へ撃力で完全分離
   if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 200){
     const L = Math.hypot(dx, dy) || 1;
