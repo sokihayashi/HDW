@@ -33,11 +33,11 @@ const LOGO_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAaQAAAHTCAAAAABN
 
 const CONFIG = {
   accent: [0.20, 0.55, 1.0],   // 差し色(青)。朱:[1.0,0.30,0.20] 緑:[0.16,0.85,0.60]
-  // 適応解像度の範囲（レンダ長辺px）— ロゴを綺麗に見せたいので高め
+  // 適応解像度の範囲（レンダ長辺px）— iPhoneの実ピクセルまで上げ、重ければ自動で下げる
   res: {
-    startMobile: 820,  startDesktop: 1280,
-    maxMobile:   1280, maxDesktop:  1900,
-    min:         680,
+    startMobile: 1280, startDesktop: 1600,
+    maxMobile:   1400, maxDesktop:  2000,
+    min:         640,
   },
   // 背景に置く文字（= ガラスが屈折させる。ロゴ/タイポとの関わり）
   bgLines: ['HAYASHI', 'DESIGN', 'WORKS'],
@@ -84,9 +84,12 @@ let agit = 0;                        // 興奮度0..1(運動エネルギー由�
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
 function deviceCaps(){
   const mob = min(windowWidth, windowHeight) < 700;
-  const start = mob ? CONFIG.res.startMobile : CONFIG.res.startDesktop;
-  let mx2  = mob ? CONFIG.res.maxMobile   : CONFIG.res.maxDesktop;
-  mx2 = min(mx2, max(windowWidth, windowHeight)); // 表示画素を超えて描かない
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const native = max(windowWidth, windowHeight) * dpr;   // 端末の実ピクセル(Retina対応)
+  let start = mob ? CONFIG.res.startMobile : CONFIG.res.startDesktop;
+  let mx2   = mob ? CONFIG.res.maxMobile   : CONFIG.res.maxDesktop;
+  mx2   = min(mx2, native);          // 実ピクセルは超えない
+  start = min(start, mx2);
   return { start, max: mx2 };
 }
 function renderSize(){
@@ -284,14 +287,15 @@ function stepSim(){
   }
   agit = constrain((e / numDrops) * 16.0, 0, 1);  // 運動エネルギー→興奮度
 }
-function impulseTap(str){              // タップ=外向きに爆ぜる
+function impulseTap(str, lx, ly){      // タップ=タップ点から外向きに爆ぜる(位置を反映)
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
-    const L = Math.hypot(pos[o], pos[o+1], pos[o+2]) || 1;
+    let dx = pos[o] - lx, dy = pos[o+1] - ly, dz = pos[o+2];
+    const L = Math.hypot(dx, dy, dz) || 1;
     const s = str / masses[i];         // 軽い粒ほど遠くへ
-    vel[o]   += pos[o]   / L * s + (Math.random() - 0.5) * str;
-    vel[o+1] += pos[o+1] / L * s + (Math.random() - 0.5) * str;
-    vel[o+2] += pos[o+2] / L * s + (Math.random() - 0.5) * str;
+    vel[o]   += dx / L * s + (Math.random() - 0.5) * str;
+    vel[o+1] += dy / L * s + (Math.random() - 0.5) * str;
+    vel[o+2] += dz / L * s + (Math.random() - 0.5) * str;
   }
 }
 function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃力(パカッと分離)
@@ -310,7 +314,8 @@ function poke(px, py){
   const now = millis();
   const dt = now - lastTap; lastTap = now;
   const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど強い
-  impulseTap(0.05 + rapid * 0.10);
+  // タップ点を液体ローカル座標に変換して、その点から弾く(位置を反映)
+  impulseTap(0.05 + rapid * 0.10, (tmx - mx) * 0.6, (tmy - my) * 0.6);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
 }
@@ -464,6 +469,12 @@ const fs = `
   }
 
   float mapScene(vec3 p){
+    // ウニョウニョ: 表面を時間で波打たせる(塊も離れた粒も生きてる質感)
+    p += 0.02 * vec3(
+      sin(p.y * 3.5 + u_time * 1.3),
+      sin(p.z * 3.5 + u_time * 1.1),
+      sin(p.x * 3.5 + u_time * 1.6)
+    );
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
     // 興奮(運動エネルギー)で融合を弱め、粒が離れると自然に分裂・再融合(物理由来)
