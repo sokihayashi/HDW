@@ -283,7 +283,7 @@ function draw(){
 
 /* ===== 粒子シミュレーション（液体の物理） ===== */
 function stepSim(){
-  const k = 0.016, damp = 0.93, g = 0.0005;  // 凝集(表面張力) / 減衰(高め=ヌルヌル粘性) / 重力
+  const k = 0.010, damp = 0.94, g = 0.0005;  // 凝集弱め=ゆっくり戻る / 減衰(ヌルヌル) / 重力
   let e = 0;
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
