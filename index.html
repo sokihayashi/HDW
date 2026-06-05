@@ -81,6 +81,7 @@ let lastInteract = -99999;
 let numDrops = 28;
 let pos, vel, home, masses;          // 位置(中心からのオフセット)/速度/定位置/質量
 let agit = 0;                        // 興奮度0..1(運動エネルギー由来)
+let dissolve = 0;                    // 溶解度0..1(連打で蓄積→粒が小さくなり最後に消える)
 let cutNX = 1, cutNY = 0, cutAmt = 0; // スワイプ切断の瞬間ギャップ(法線/量)
 
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
@@ -218,6 +219,7 @@ function draw(){
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
   stepSim();        // 粒子の物理(凝集=表面張力 / 重力 / 減衰)
   cutAmt *= 0.88;   // 切断ギャップは素早く塞がる(が撃力で既に分離済み)
+  dissolve *= 0.992; // 触らなければゆっくり再形成
   updateDrops();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
@@ -250,7 +252,8 @@ function draw(){
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
-  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit)); // 興奮で縮む=実像が覗く
+  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit) * (1.0 - dissolve)); // 興奮で縮む/溶解で消える
+  myShader.setUniform('u_dissolve', dissolve);
   myShader.setUniform('u_cutDir', [cutNX, cutNY]);
   myShader.setUniform('u_cutAmt', cutAmt);
   myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
@@ -324,6 +327,7 @@ function poke(px, py){
   const prox = constrain(1.0 - Math.hypot(tx - mx, ty - my) * 1.6, 0.0, 1.0);
   if (prox <= 0.02) return;
   impulseTap((0.06 + rapid * 0.12) * prox);
+  dissolve = min(1.0, dissolve + (0.05 + rapid * 0.14) * prox); // 連打でどんどん細かく→消滅
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
 }
@@ -455,6 +459,7 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
+  uniform float u_dissolve;   // 溶解度(連打で粒が小さくなり消える)
   uniform vec2  u_cutDir;     // スワイプ切断面の法線
   uniform float u_cutAmt;     // 切断ギャップ量(時間で塞がる)
   uniform float u_cutWidth;   // 切断ギャップ幅
@@ -493,7 +498,7 @@ const fs = `
     for (int i = 0; i < 28; i++){
       vec3 parentPos = mousePos + u_directions[i];        // 粒子の位置(シミュレーション)
       float m = u_masses[i];
-      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit); // 興奮で少し小さく
+      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit) * (1.0 - u_dissolve); // 興奮で小さく/溶解で消える
       // 速度方向へ伸ばす=しずく/筋(動いてる粒の球体感を解消)
       vec3 rel = p - parentPos;
       vec3 v = u_vel[i];
