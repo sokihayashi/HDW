@@ -58,6 +58,7 @@ const CONFIG = {
   logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
   logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
   coreSize:   0.52,          // 中央コアの半径（休止時にロゴを覆う。粒がこの周りに凹凸を作る）
+  cutWidth:   0.18,          // スワイプ切断の瞬間ギャップ幅（完全に切れて分離）
 };
 
 let myShader, cnv, bgTex, logoImg;
@@ -80,6 +81,7 @@ let lastInteract = -99999;
 let numDrops = 28;
 let pos, vel, home, masses;          // 位置(中心からのオフセット)/速度/定位置/質量
 let agit = 0;                        // 興奮度0..1(運動エネルギー由来)
+let cutNX = 1, cutNY = 0, cutAmt = 0; // スワイプ切断の瞬間ギャップ(法線/量)
 
 /* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
 function deviceCaps(){
@@ -215,6 +217,7 @@ function draw(){
   vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
   stepSim();        // 粒子の物理(凝集=表面張力 / 重力 / 減衰)
+  cutAmt *= 0.88;   // 切断ギャップは素早く塞がる(が撃力で既に分離済み)
   updateDrops();
 
   // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
@@ -234,6 +237,7 @@ function draw(){
   myShader.setUniform('u_agit', agit);
   myShader.setUniform('u_rotation', [0.0, 0.0]);
   myShader.setUniform('u_directions', pos);
+  myShader.setUniform('u_vel', vel);
   myShader.setUniform('u_masses', masses);
   myShader.setUniform('u_accent', CONFIG.accent);
   myShader.setUniform('u_bg', bgTex);
@@ -247,6 +251,9 @@ function draw(){
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
   myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit)); // 興奮で縮む=実像が覗く
+  myShader.setUniform('u_cutDir', [cutNX, cutNY]);
+  myShader.setUniform('u_cutAmt', cutAmt);
+  myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
   sceneG.beginShape();
   sceneG.vertex(-1, -1, 0, 0, 0);
   sceneG.vertex( 1, -1, 0, 1, 0);
@@ -273,7 +280,7 @@ function draw(){
 
 /* ===== 粒子シミュレーション（液体の物理） ===== */
 function stepSim(){
-  const k = 0.018, damp = 0.90, g = 0.0005;  // 凝集(表面張力) / 減衰 / 重力
+  const k = 0.016, damp = 0.93, g = 0.0005;  // 凝集(表面張力) / 減衰(高め=ヌルヌル粘性) / 重力
   let e = 0;
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
@@ -287,15 +294,14 @@ function stepSim(){
   }
   agit = constrain((e / numDrops) * 16.0, 0, 1);  // 運動エネルギー→興奮度
 }
-function impulseTap(str, lx, ly){      // タップ=タップ点から外向きに爆ぜる(位置を反映)
+function impulseTap(str){              // タップ=中心から放射状に強く爆ぜる
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
-    let dx = pos[o] - lx, dy = pos[o+1] - ly, dz = pos[o+2];
-    const L = Math.hypot(dx, dy, dz) || 1;
+    const L = Math.hypot(pos[o], pos[o+1], pos[o+2]) || 1;
     const s = str / masses[i];         // 軽い粒ほど遠くへ
-    vel[o]   += dx / L * s + (Math.random() - 0.5) * str;
-    vel[o+1] += dy / L * s + (Math.random() - 0.5) * str;
-    vel[o+2] += dz / L * s + (Math.random() - 0.5) * str;
+    vel[o]   += pos[o]   / L * s + (Math.random() - 0.5) * str;
+    vel[o+1] += pos[o+1] / L * s + (Math.random() - 0.5) * str;
+    vel[o+2] += pos[o+2] / L * s + (Math.random() - 0.5) * str;
   }
 }
 function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃力(パカッと分離)
@@ -314,8 +320,9 @@ function poke(px, py){
   const now = millis();
   const dt = now - lastTap; lastTap = now;
   const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど強い
-  // タップ点を液体ローカル座標に変換して、その点から弾く(位置を反映)
-  impulseTap(0.05 + rapid * 0.10, (tmx - mx) * 0.6, (tmy - my) * 0.6);
+  // 液体から遠い所をタップしても弾けないように、近接度でゲート
+  const prox = constrain(1.0 - Math.hypot(tmx - mx, tmy - my) * 1.0, 0.0, 1.0);
+  impulseTap((0.06 + rapid * 0.12) * prox);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
 }
@@ -324,10 +331,11 @@ function swipe(){
   const sp = mag(dx, dy);
   tmx = map(mouseX, 0, width, -1.0, 1.0);
   tmy = map(mouseY, 0, height, 1.0, -1.0);
-  // 速い横スワイプ＝水を切る(両側へ撃力で分離)。縦はスクロール優先・throttle
+  // 速い横スワイプ＝水を切る。瞬間ギャップで綺麗にスライス＋両側へ撃力で完全分離
   if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 200){
     const L = Math.hypot(dx, dy) || 1;
-    impulseCut(dy / L, dx / L, Math.min(0.10, sp * 0.006));
+    cutNX = dy / L; cutNY = dx / L; cutAmt = 1.0;          // 切断面の法線
+    impulseCut(cutNX, cutNY, Math.min(0.16, sp * 0.010));  // 強めに押し分ける
     spawnDrops(2);
     lastCutTime = millis();
   }
@@ -434,6 +442,7 @@ const fs = `
   uniform float u_agit;       // 興奮度0..1(運動エネルギー)
   uniform vec2  u_rotation;
   uniform vec3  u_directions[28];
+  uniform vec3  u_vel[28];     // 粒子の速度(しずく形ストレッチ用)
   uniform float u_masses[28];
   uniform vec3  u_accent;
   uniform sampler2D u_bg;     // 背景テクスチャ(ロゴ/タイポ)
@@ -447,6 +456,9 @@ const fs = `
   uniform float u_scale;      // 液体の倍率(画面サイズ可変)
   uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
   uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
+  uniform vec2  u_cutDir;     // スワイプ切断面の法線
+  uniform float u_cutAmt;     // 切断ギャップ量(時間で塞がる)
+  uniform float u_cutWidth;   // 切断ギャップ幅
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -483,13 +495,22 @@ const fs = `
       vec3 parentPos = mousePos + u_directions[i];        // 粒子の位置(シミュレーション)
       float m = u_masses[i];
       float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit); // 興奮で少し小さく
-      float ripple = sin(length(p - parentPos) * 18.0 - u_time * 9.0) * 0.015 * u_agit;
-      float drop = length(p - parentPos) - (pSize + ripple);
+      // 速度方向へ伸ばす=しずく/筋(動いてる粒の球体感を解消)
+      vec3 rel = p - parentPos;
+      vec3 v = u_vel[i];
+      float vl = length(v);
+      if (vl > 1e-4) rel -= (v / vl) * dot(rel, v / vl) * min(vl * 9.0, 0.55);
+      float ripple = sin(length(rel) * 18.0 - u_time * 9.0) * 0.015 * u_agit;
+      float drop = length(rel) - (pSize + ripple);
       d = smin(d, drop, blendK);
     }
     // 中央コア: 落ち着いてる時はロゴを覆う。興奮(u_coreをJS側で縮小)で割れて実像が覗く
     float core = length(p - mousePos) - u_core;
     d = smin(d, core, 0.40);
+    // スワイプ切断: 瞬間ギャップでコアごと綺麗にスライス(撃力で分離済み)
+    if (u_cutAmt > 0.001){
+      d = max(d, u_cutWidth * u_cutAmt - abs(dot(p.xy - mousePos.xy, u_cutDir)));
+    }
     return d;
   }
 
