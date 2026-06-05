@@ -6,7 +6,7 @@
 <title>Hayashi Design Works — Hydra</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#060608;
+  html, body { margin:0; height:100%; overflow:hidden; background:#000000;
     -webkit-user-select:none; user-select:none; }
   /* pan-y: 縦スワイプはページスクロールへ。タップ/横ドラッグは作品が拾う */
   html, body, canvas { touch-action:pan-y; }
@@ -43,7 +43,7 @@ const CONFIG = {
   bgLines: ['HAYASHI', 'DESIGN', 'WORKS'],
   bgFoot:  'Soki Hayashi Designworks',
   bgInk:   238,    // 文字色 (0-255 グレースケール)
-  bgPaper: 12,     // 背景色
+  bgPaper: 0,      // 背景色（完全な黒＝他セクションと境界が出ない）
   // ガラスの質感
   glassTint:  0.92,  // 透け具合。上げてロゴを明るく(通常時の暗さ対策)
   planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
@@ -534,7 +534,7 @@ const fs = `
   vec3 bgAt(vec2 uv){
     uv = logoUV(uv);
     if (u_flip > 0.5) uv.y = 1.0 - uv.y;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.047); // 枠外=背景色
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0); // 枠外=完全な黒
     return texture2D(u_bg, uv).rgb;
   }
 
@@ -546,8 +546,7 @@ const fs = `
     float tp = (u_planeZ - ro2.z) / min(rd2.z, -0.001);
     vec3 qq = ro2 + rd2 * tp;
     vec2 luv = vec2(qq.x / (2.0 * u_logoHalfW), qq.y / (2.0 * u_logoHalfH)) + 0.5;
-    vec3 pap = vec3(0.047) + vec3(0.012, 0.015, 0.022) * (0.5 + 0.5 * sin(u_time * 0.18 + s.x * 2.5 - s.y * 2.0));
-    return max(pap, bgAt(luv));
+    return bgAt(luv);   // 背景は完全な黒。ロゴ(白)だけが浮かぶ
   }
 
   void main(){
@@ -622,10 +621,11 @@ const fs = `
 
     // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
 
-    // 階調: フィルミック(ACES) + ビネット + グレイン
+    // 階調: フィルミック(ACES) + ビネット + グレイン(黒部分には乗せない=純黒を保つ)
     col = aces(col * 1.06);
     col *= 1.05 - length(uv) * 0.18;
-    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.022;
+    float lum = max(col.r, max(col.g, col.b));
+    col += (noise(uv * 500.0 + u_time) - 0.5) * 0.022 * smoothstep(0.0, 0.12, lum);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
