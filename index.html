@@ -8,90 +8,75 @@
 <style>
   html, body { margin:0; height:100%; overflow:hidden; background:#000000;
     -webkit-user-select:none; user-select:none; }
-  /* pan-y: 縦スワイプはページスクロールへ。タップ/横ドラッグは作品が拾う */
+  
   html, body, canvas { touch-action:pan-y; }
   canvas { display:block; }
 </style>
 </head>
 <body>
 <script>
-/* =========================================================
-   Hayashi Design Works — HYDRA (新規制作 / 別物 v3)
-   ---------------------------------------------------------
-   SDFレイマーチングの液体クローム生命体。触ると飛び散り粘って戻る。
-   元ネタ: GENUARY 2026 "Resonant Hydra-morphic" をヒーロー用に再設計。
-   v3の強化:
-   ・適応解像度（FPSを見て解像度を自動調整 = クッキリ かつ 60fps維持）
-   ・液体クロームのマテリアル（スペキュラ + 擬似環境反射 + フレネル）
-   ・スタジオ風グラデ背景 + ビネットで奥行き
-   ・差し色を意図的に（縁に常時うっすら / 飛散時に強く）
-   ・スマホ縦・全画面 / スクロールを殺さない / マイク・センサー不使用(Wix対応)
-   ========================================================= */
 
-/* ===== CONFIG ===== */
 const LOGO_URI = "data:image/png;base64,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";
 
 const CONFIG = {
-  accent: [0.20, 0.55, 1.0],   // 差し色(青)。朱:[1.0,0.30,0.20] 緑:[0.16,0.85,0.60]
-  // 適応解像度の範囲（レンダ長辺px）— iPhoneの実ピクセルまで上げ、重ければ自動で下げる
+  accent: [0.20, 0.55, 1.0],
+
   res: {
     startMobile: 1280, startDesktop: 1600,
     maxMobile:   1400, maxDesktop:  2000,
     min:         640,
   },
-  // 背景に置く文字（= ガラスが屈折させる。ロゴ/タイポとの関わり）
+
   bgLines: ['HAYASHI', 'DESIGN', 'WORKS'],
   bgFoot:  'Soki Hayashi Designworks',
-  bgInk:   238,    // 文字色 (0-255 グレースケール)
-  bgPaper: 0,      // 背景色（完全な黒＝他セクションと境界が出ない）
-  // ガラスの質感
-  glassTint:  0.92,  // 透け具合。上げてロゴを明るく(通常時の暗さ対策)
-  planeZ:    -0.55,  // ロゴ平面の奥行き(屈折の効き。奥ほど歪み・拡大)
-  logoWorld:  0.40,  // ロゴ平面のworld半径。コアより小さく＝液体が全面を覆える
-  absorb:     0.50,  // ガラスの吸収(体積感)。下げて暗くなりすぎないように
-  dispersion: 0.020, // 色収差(分光/プリズム)。C4D的な歪みの色割れ
-  flipBg:     true,  // 背景テクスチャの上下反転(文字が逆さに見えたら false に)
-  // 液体のサイズ（画面サイズで可変）
-  formScale:  1.0,   // 全体倍率の手動調整
-  // 屈折させる対象（ロゴ画像）。空ならテキスト(bgLines)で代用
-  logoUrl:    LOGO_URI,   // ロゴをHTMLに焼き込み（外部ファイル不要・どこでも動く）
-  logoSize:   0.30,          // 画面短辺に対するロゴの大きさ（液体が覆える大きさに）
-  logoTiltMax: 0.55,         // スクロール連動の3D回転(Y軸)の最大角(rad)
-  coreSize:   0.52,          // 中央コアの半径（休止時にロゴを覆う。粒がこの周りに凹凸を作る）
-  cutWidth:   0.18,          // スワイプ切断の瞬間ギャップ幅（完全に切れて分離）
+  bgInk:   238,
+  bgPaper: 0,
+
+  glassTint:  0.92,
+  planeZ:    -0.55,
+  logoWorld:  0.40,
+  absorb:     0.50,
+  dispersion: 0.020,
+  flipBg:     true,
+
+  formScale:  1.0,
+
+  logoUrl:    LOGO_URI,
+  logoSize:   0.30,
+  logoTiltMax: 0.55,
+  coreSize:   0.52,
+  cutWidth:   0.18,
 };
 
 let myShader, cnv, bgTex, logoImg;
-let sceneG, postShader;              // 2パス: シーンをsceneGに描き、postで水滴合成
-let rmLong = 700, rmMaxDev = 980;     // 現在/上限のレンダ長辺
+let sceneG, postShader;
+let rmLong = 700, rmMaxDev = 980;
 let fpsAvg = 60, adjustCool = 0;
-let lastTap = -9999;                  // 直前タップ時刻（連打テンポの計測用）
-let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999; // スクロール連動(postMessage)
-const MAXDROPS = 40;                 // 前面ガラスの水滴(小さく下に流れる)
-let drops = [];                      // {x,y,r,vy}
+let lastTap = -9999;
+let scrollProg = 0.5, scrollTarget = 0.5, lastScrollMsg = -9999;
+const MAXDROPS = 40;
+let drops = [];
 let dropBuf = new Float32Array(MAXDROPS * 4);
 let lastCutTime = -9999;
-let logoAspect = 777 / 864;          // ロゴの縦横比（屈折の平面マッピング用）
+let logoAspect = 777 / 864;
 
-let mx = 0, my = 0, tmx = 0, tmy = 0;                 // 液体の中心(指追従)
-let vmx = 0, vmy = 0;                                 // 中心の慣性
+let mx = 0, my = 0, tmx = 0, tmy = 0;
+let vmx = 0, vmy = 0;
 let lastInteract = -99999;
 
-// ===== 粒子シミュレーション(液体の物理) =====
 let numDrops = 28;
-let pos, vel, home, masses;          // 位置(中心からのオフセット)/速度/定位置/質量
-let agit = 0;                        // 興奮度0..1(運動エネルギー由来)
-let dissolve = 0;                    // 溶解度0..1(連打で蓄積→粒が小さくなり最後に消える)
-let cutNX = 1, cutNY = 0, cutAmt = 0; // スワイプ切断の瞬間ギャップ(法線/量)
+let pos, vel, home, masses;
+let agit = 0;
+let dissolve = 0;
+let cutNX = 1, cutNY = 0, cutAmt = 0;
 
-/* ===== sizing: 低解像度バッファで描いてCSSで全画面に拡大 ===== */
 function deviceCaps(){
   const mob = min(windowWidth, windowHeight) < 700;
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  const native = max(windowWidth, windowHeight) * dpr;   // 端末の実ピクセル(Retina対応)
+  const native = max(windowWidth, windowHeight) * dpr;
   let start = mob ? CONFIG.res.startMobile : CONFIG.res.startDesktop;
   let mx2   = mob ? CONFIG.res.maxMobile   : CONFIG.res.maxDesktop;
-  mx2   = min(mx2, native);          // 実ピクセルは超えない
+  mx2   = min(mx2, native);
   start = min(start, mx2);
   return { start, max: mx2 };
 }
@@ -113,11 +98,10 @@ function reflow(){
   applyDisplaySize();
 }
 
-/* 背景テクスチャ(=ロゴ/タイポ)を生成。ガラスがこれを屈折させる */
 function buildBgTex(){
   if (bgTex) bgTex.remove();
   if (logoImg) logoAspect = logoImg.width / logoImg.height;
-  // テクスチャ全体=ロゴ（uv 0..1 がロゴ境界）。屈折で「平面」として参照する
+
   const texH = 1280;
   const texW = max(2, round(texH * logoAspect));
   const g = createGraphics(texW, texH);
@@ -143,7 +127,6 @@ function preload(){
   }
 }
 
-/* 液体の倍率: 画面が大きいほど少し大きく */
 function formScaleFactor(){
   const s = constrain(map(min(windowWidth, windowHeight), 380, 1200, 0.9, 1.45), 0.9, 1.6);
   return s * CONFIG.formScale;
@@ -158,14 +141,14 @@ function setup(){
   cnv = createCanvas(r.w, r.h, WEBGL);
   applyDisplaySize();
   noStroke();
-  // 2パス: シーンはオフスクリーン(sceneG)に描画 → mainで水滴レイヤー合成
+
   sceneG = createGraphics(r.w, r.h, WEBGL);
   sceneG.pixelDensity(1);
   sceneG.noStroke();
-  myShader = sceneG.createShader(vs, fs);     // シーン(レイマーチ)
-  postShader = createShader(postVS, postFS);  // 後処理(水滴)
+  myShader = sceneG.createShader(vs, fs);
+  postShader = createShader(postVS, postFS);
   buildBgTex();
-  // Wix(親ページ)からスクロール位置を受け取りロゴを3D回転（無ければ自動回転）
+
   window.addEventListener('message', (e) => {
     const d = e.data;
     if (d && typeof d.hdwScroll === 'number'){
@@ -178,7 +161,7 @@ function setup(){
   home = new Float32Array(numDrops * 3);
   masses = [];
   for (let i = 0; i < numDrops; i++){
-    const v = p5.Vector.random3D().mult(random(0.22, 0.58)); // 定位置=コア表面付近(凹凸を作る)
+    const v = p5.Vector.random3D().mult(random(0.22, 0.58));
     home[i*3] = v.x; home[i*3+1] = v.y; home[i*3+2] = v.z;
     pos[i*3]  = v.x; pos[i*3+1]  = v.y; pos[i*3+2]  = v.z;
     masses.push(random(0.3, 1.8));
@@ -191,19 +174,17 @@ function windowResized(){
   reflow();
 }
 
-/* ===== 適応解像度: FPSに応じてレンダ解像度を上下 ===== */
 function adaptResolution(){
   fpsAvg = lerp(fpsAvg, frameRate(), 0.08);
   if (adjustCool > 0){ adjustCool--; return; }
   if (frameCount < 60) return;
-  // 重い時だけ下げて収束させる（上げ直しはしない＝リサイズ往復による点滅を防ぐ）
+
   if (fpsAvg < 45 && rmLong > CONFIG.res.min){
     rmLong = max(CONFIG.res.min, floor(rmLong * 0.85));
     reflow(); adjustCool = 90;
   }
 }
 
-/* ===== draw ===== */
 function draw(){
   if (!myShader) return;
   shader(myShader);
@@ -211,18 +192,17 @@ function draw(){
   const now = millis();
   const idle = (now - lastInteract) > 2200;
   if (idle){
-    tmx = sin(now * 0.00028) * 0.05;   // ゆるい漂い(ロゴは覆ったまま)
+    tmx = sin(now * 0.00028) * 0.05;
     tmy = cos(now * 0.00037) * 0.045;
   }
-  // 中心の指追従(バネ+減衰)
+
   vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
-  stepSim();        // 粒子の物理(凝集=表面張力 / 重力 / 減衰)
-  cutAmt *= 0.88;   // 切断ギャップは素早く塞がる(が撃力で既に分離済み)
-  dissolve *= 0.992; // 触らなければゆっくり再形成
+  stepSim();
+  cutAmt *= 0.88;
+  dissolve *= 0.992;
   updateDrops();
 
-  // ロゴの3D回転: スクロール信号があれば連動、無ければゆっくり自動回転
   scrollProg += (scrollTarget - scrollProg) * 0.08;
   let logoRot;
   if (millis() - lastScrollMsg < 2500){
@@ -231,7 +211,6 @@ function draw(){
     logoRot = sin(millis() * 0.0004) * CONFIG.logoTiltMax * 0.5;
   }
 
-  // ===== パス1: シーンをオフスクリーン(sceneG)に描画 =====
   sceneG.shader(myShader);
   myShader.setUniform('u_resolution', [float(width), float(height)]);
   myShader.setUniform('u_time', now / 1000.0);
@@ -252,7 +231,7 @@ function draw(){
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
-  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit) * (1.0 - dissolve)); // 興奮で縮む/溶解で消える
+  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit) * (1.0 - dissolve));
   myShader.setUniform('u_dissolve', dissolve);
   myShader.setUniform('u_cutDir', [cutNX, cutNY]);
   myShader.setUniform('u_cutAmt', cutAmt);
@@ -264,7 +243,6 @@ function draw(){
   sceneG.vertex(-1,  1, 0);
   sceneG.endShape(CLOSE);
 
-  // ===== パス2: 水滴レイヤー(シーンを実際に屈折) =====
   shader(postShader);
   postShader.setUniform('u_scene', sceneG);
   postShader.setUniform('u_resolution', [float(width), float(height)]);
@@ -281,13 +259,12 @@ function draw(){
   adaptResolution();
 }
 
-/* ===== 粒子シミュレーション（液体の物理） ===== */
 function stepSim(){
-  const k = 0.010, damp = 0.94, g = 0.0005;  // 凝集弱め=ゆっくり戻る / 減衰(ヌルヌル) / 重力
+  const k = 0.010, damp = 0.94, g = 0.0005;
   let e = 0;
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
-    // 定位置へ戻る力(凝集) + 重力 + 生きた微小ノイズ
+
     vel[o]   += (home[o]   - pos[o])   * k + (Math.random() - 0.5) * 0.0006;
     vel[o+1] += (home[o+1] - pos[o+1]) * k - g + (Math.random() - 0.5) * 0.0006;
     vel[o+2] += (home[o+2] - pos[o+2]) * k + (Math.random() - 0.5) * 0.0006;
@@ -295,19 +272,19 @@ function stepSim(){
     pos[o] += vel[o]; pos[o+1] += vel[o+1]; pos[o+2] += vel[o+2];
     e += Math.hypot(vel[o], vel[o+1], vel[o+2]);
   }
-  agit = constrain((e / numDrops) * 16.0, 0, 1);  // 運動エネルギー→興奮度
+  agit = constrain((e / numDrops) * 16.0, 0, 1);
 }
-function impulseTap(str){              // タップ=中心から放射状に強く爆ぜる
+function impulseTap(str){
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
     const L = Math.hypot(pos[o], pos[o+1], pos[o+2]) || 1;
-    const s = str / masses[i];         // 軽い粒ほど遠くへ
+    const s = str / masses[i];
     vel[o]   += pos[o]   / L * s + (Math.random() - 0.5) * str;
     vel[o+1] += pos[o+1] / L * s + (Math.random() - 0.5) * str;
     vel[o+2] += pos[o+2] / L * s + (Math.random() - 0.5) * str;
   }
 }
-function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃力(パカッと分離)
+function impulseCut(nx, ny, str){
   for (let i = 0; i < numDrops; i++){
     const o = i * 3;
     const side = (pos[o] * nx + pos[o+1] * ny) >= 0 ? 1 : -1;
@@ -316,53 +293,51 @@ function impulseCut(nx, ny, str){      // スワイプ=切断面の両側へ撃�
   }
 }
 
-/* ===== interaction（スクロールは殺さない = preventDefaultしない） ===== */
 function poke(px, py){
   const tx = map(px, 0, width, -1.0, 1.0);
   const ty = map(py, 0, height, 1.0, -1.0);
   const now = millis();
   const dt = now - lastTap; lastTap = now;
-  const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0); // 速い連打ほど強い
-  // 中央の液体(mx,my)から離れた"空タップ"は完全に無反応
+  const rapid = constrain(map(dt, 80, 520, 1.0, 0.12), 0.12, 1.0);
+
   const prox = constrain(1.0 - Math.hypot(tx - mx, ty - my) * 1.6, 0.0, 1.0);
   if (prox <= 0.02) return;
   impulseTap((0.06 + rapid * 0.12) * prox);
-  dissolve = min(1.0, dissolve + (0.05 + rapid * 0.14) * prox); // 連打でどんどん細かく→消滅
+  dissolve = min(1.0, dissolve + (0.05 + rapid * 0.14) * prox);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
 }
 function swipe(){
   const dx = mouseX - pmouseX, dy = mouseY - pmouseY;
   const sp = mag(dx, dy);
-  // 速い横スワイプ＝水を切る。瞬間ギャップで綺麗にスライス＋両側へ撃力で完全分離
+
   if (sp > 8 && abs(dx) >= abs(dy) && millis() - lastCutTime > 200){
     const L = Math.hypot(dx, dy) || 1;
-    cutNX = dy / L; cutNY = dx / L; cutAmt = 1.0;          // 切断面の法線
-    impulseCut(cutNX, cutNY, Math.min(0.16, sp * 0.010));  // 強めに押し分ける
+    cutNX = dy / L; cutNY = dx / L; cutAmt = 1.0;
+    impulseCut(cutNX, cutNY, Math.min(0.16, sp * 0.010));
     spawnDrops(2);
     lastCutTime = millis();
   }
   lastInteract = millis();
 }
 
-/* 前面ガラスの水滴：最小サイズで、下に流れて画面外で消える（フェードしない） */
 function spawnDrops(n){
   for (let i = 0; i < n; i++){
     if (drops.length >= MAXDROPS) drops.shift();
     drops.push({
       x: random(0.05, 0.95),
       y: random(0.20, 0.95),
-      r: random(0.003, 0.006),       // とても小さい
-      vy: random(0.0002, 0.0010),    // 下に流れる速度(個体差)
+      r: random(0.003, 0.006),
+      vy: random(0.0002, 0.0010),
     });
   }
 }
 function updateDrops(){
   for (let k = drops.length - 1; k >= 0; k--){
     const d = drops[k];
-    d.vy += 0.000004;                  // ゆっくり加速
-    d.y  -= d.vy;                      // 下へ流れる(suv.y=下が0)
-    if (d.y < -0.06) drops.splice(k, 1);  // 画面下で消える
+    d.vy += 0.000004;
+    d.y  -= d.vy;
+    if (d.y < -0.06) drops.splice(k, 1);
   }
   for (let i = 0; i < MAXDROPS; i++){
     const o = i * 4;
@@ -375,18 +350,16 @@ function updateDrops(){
   }
 }
 
-function touchStarted(){ poke(mouseX, mouseY); }     // returnしない
+function touchStarted(){ poke(mouseX, mouseY); }
 function touchMoved(){ swipe(); }
 function mousePressed(){ poke(mouseX, mouseY); }
 function mouseDragged(){ swipe(); }
 
-/* ===== shaders ===== */
 const vs = `
   attribute vec3 aPosition;
   void main(){ gl_Position = vec4(aPosition, 1.0); }
 `;
 
-/* 後処理(水滴): シーンテクスチャを実際に屈折させる */
 const postVS = `
   attribute vec3 aPosition;
   void main(){ gl_Position = vec4(aPosition, 1.0); }
@@ -412,7 +385,6 @@ const postFS = `
     vec3 col = scn(suv);
     float asp = u_resolution.x / u_resolution.y;
 
-    // 前面ガラスの水滴: シーンそのものを反転拡大して屈折(Apple天気的)
     for (int i = 0; i < 30; i++){
       vec4 dp = u_drops[i];
       if (dp.w <= 0.001) continue;
@@ -422,14 +394,14 @@ const postFS = `
       if (dist > r) continue;
       float h = dist / r;
       float cz = sqrt(max(0.0, 1.0 - h * h));
-      vec2 invUV = dp.xy - (suv - dp.xy) * 1.8;                 // 反転拡大
+      vec2 invUV = dp.xy - (suv - dp.xy) * 1.8;
       vec2 edgeOff = (diff / r) * (1.0 - cz) * (r * 0.5); edgeOff.x /= asp;
       vec3 c = scn(invUV - edgeOff);
       float rim = smoothstep(0.82, 0.95, h) * (1.0 - smoothstep(0.95, 1.0, h));
       float hl  = 1.0 - smoothstep(0.0, 0.16 * r, length(diff - vec2(-0.30, 0.34) * r));
-      c += hl * 1.1;                                            // ハイライト
-      c += rim * 0.45;                                          // 全反射リム
-      c *= 1.0 - smoothstep(0.92, 1.0, h) * 0.55;               // 接地の暗縁
+      c += hl * 1.1;
+      c += rim * 0.45;
+      c *= 1.0 - smoothstep(0.92, 1.0, h) * 0.55;
       float mask = smoothstep(1.0, 0.95, h) * clamp(dp.w, 0.0, 1.0) * 0.85;
       col = mix(col, c, mask);
     }
@@ -442,31 +414,30 @@ const fs = `
   uniform float u_time;
   uniform vec2  u_resolution;
   uniform vec2  u_mouse;
-  uniform float u_agit;       // 興奮度0..1(運動エネルギー)
+  uniform float u_agit;
   uniform vec2  u_rotation;
   uniform vec3  u_directions[28];
-  uniform vec3  u_vel[28];     // 粒子の速度(しずく形ストレッチ用)
+  uniform vec3  u_vel[28];
   uniform float u_masses[28];
   uniform vec3  u_accent;
-  uniform sampler2D u_bg;     // 背景テクスチャ(ロゴ/タイポ)
-  uniform float u_glassTint;  // ガラスの透け具合
-  uniform float u_planeZ;     // ロゴ平面の奥行き
-  uniform float u_logoHalfW;  // ロゴ平面の半幅(world)
-  uniform float u_logoHalfH;  // ロゴ平面の半高(world)
-  uniform float u_absorb;     // ガラスの吸収係数(体積感)
-  uniform float u_disp;       // 色収差の強さ
-  uniform float u_flip;       // 背景テクスチャ上下反転
-  uniform float u_scale;      // 液体の倍率(画面サイズ可変)
-  uniform float u_logoRot;    // ロゴ平面のY軸回転(スクロール連動)
-  uniform float u_core;       // 中央コアの半径(休止時ロゴを覆う)
-  uniform float u_dissolve;   // 溶解度(連打で粒が小さくなり消える)
-  uniform vec2  u_cutDir;     // スワイプ切断面の法線
-  uniform float u_cutAmt;     // 切断ギャップ量(時間で塞がる)
-  uniform float u_cutWidth;   // 切断ギャップ幅
+  uniform sampler2D u_bg;
+  uniform float u_glassTint;
+  uniform float u_planeZ;
+  uniform float u_logoHalfW;
+  uniform float u_logoHalfH;
+  uniform float u_absorb;
+  uniform float u_disp;
+  uniform float u_flip;
+  uniform float u_scale;
+  uniform float u_logoRot;
+  uniform float u_core;
+  uniform float u_dissolve;
+  uniform vec2  u_cutDir;
+  uniform float u_cutAmt;
+  uniform float u_cutWidth;
 
   float noise(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
-  // フィルミック・トーンマップ(ACES近似): 白飛びを上品にロールオフ
   vec3 aces(vec3 x){
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
   }
@@ -485,7 +456,7 @@ const fs = `
   }
 
   float mapScene(vec3 p){
-    // ウニョウニョ: 表面を時間で波打たせる(塊も離れた粒も生きてる質感)
+
     p += 0.02 * vec3(
       sin(p.y * 3.5 + u_time * 1.3),
       sin(p.z * 3.5 + u_time * 1.1),
@@ -493,13 +464,13 @@ const fs = `
     );
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
-    // 興奮(運動エネルギー)で融合を弱め、粒が離れると自然に分裂・再融合(物理由来)
+
     float blendK = mix(0.40, 0.05, u_agit);
     for (int i = 0; i < 28; i++){
-      vec3 parentPos = mousePos + u_directions[i];        // 粒子の位置(シミュレーション)
+      vec3 parentPos = mousePos + u_directions[i];
       float m = u_masses[i];
-      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit) * (1.0 - u_dissolve); // 興奮で小さく/溶解で消える
-      // 速度方向へ伸ばす=しずく/筋(動いてる粒の球体感を解消)
+      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit) * (1.0 - u_dissolve);
+
       vec3 rel = p - parentPos;
       vec3 v = u_vel[i];
       float vl = length(v);
@@ -508,17 +479,17 @@ const fs = `
       float drop = length(rel) - (pSize + ripple);
       d = smin(d, drop, blendK);
     }
-    // 中央コア: 落ち着いてる時はロゴを覆う。興奮(u_coreをJS側で縮小)で割れて実像が覗く
+
     float core = length(p - mousePos) - u_core;
     d = smin(d, core, 0.40);
-    // スワイプ切断: 瞬間ギャップでコアごと綺麗にスライス(撃力で分離済み)
+
     if (u_cutAmt > 0.001){
       d = max(d, u_cutWidth * u_cutAmt - abs(dot(p.xy - mousePos.xy, u_cutDir)));
     }
     return d;
   }
 
-  vec3 getNormal(vec3 p){            // 四面体4タップ(6→4でmapScene評価を削減)
+  vec3 getNormal(vec3 p){
     const vec2 k = vec2(1.0, -1.0);
     const float e = 0.01;
     return normalize(
@@ -529,14 +500,13 @@ const fs = `
     );
   }
 
-  // 擬似環境(スタジオ): ほぼ暗く、明るいソフトボックスの帯だけが鋭く映り込む = 締まったクローム
   vec3 env(vec3 r){
     vec3 rn = normalize(r);
     float y = rn.y * 0.5 + 0.5;
-    vec3 grad = mix(vec3(0.02), vec3(0.22), smoothstep(0.0, 1.0, y));             // 床→天井
-    float key  = pow(max(dot(rn, normalize(vec3( 0.35, 0.80, 0.50))), 0.0), 6.0); // 主光(やわらかい)
-    float key2 = pow(max(dot(rn, normalize(vec3(-0.25, 0.55, 0.80))), 0.0), 16.0);// 第2の鋭い光
-    float fill = pow(max(dot(rn, normalize(vec3(-0.55, 0.10, 0.60))), 0.0), 10.0);// 補助光(冷)
+    vec3 grad = mix(vec3(0.02), vec3(0.22), smoothstep(0.0, 1.0, y));
+    float key  = pow(max(dot(rn, normalize(vec3( 0.35, 0.80, 0.50))), 0.0), 6.0);
+    float key2 = pow(max(dot(rn, normalize(vec3(-0.25, 0.55, 0.80))), 0.0), 16.0);
+    float fill = pow(max(dot(rn, normalize(vec3(-0.55, 0.10, 0.60))), 0.0), 10.0);
     vec3 c = grad;
     c += vec3(1.6) * key;
     c += vec3(1.1) * key2;
@@ -544,7 +514,6 @@ const fs = `
     return c;
   }
 
-  // ロゴ平面のY軸3D回転（スクロール連動）: 透視投影の逆写像
   vec2 logoUV(vec2 uv){
     vec2 s = uv - 0.5;
     float ca = cos(u_logoRot), sa = sin(u_logoRot);
@@ -555,15 +524,13 @@ const fs = `
     return vec2(X, Y) + 0.5;
   }
 
-  // 背景テクスチャ(ロゴ)を screen uv で参照。3D回転を適用し、p5の上下反転は u_flip で補正
   vec3 bgAt(vec2 uv){
     uv = logoUV(uv);
     if (u_flip > 0.5) uv.y = 1.0 - uv.y;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0); // 枠外=完全な黒
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0);
     return texture2D(u_bg, uv).rgb;
   }
 
-  // 任意のスクリーン座標での背景(実像+紙)。画面の水滴レンズが参照する
   vec3 background(vec2 s){
     vec2 uvc = (s * 2.0 - 1.0) * (u_resolution / min(u_resolution.x, u_resolution.y));
     vec3 ro2 = vec3(0.0, 0.0, 4.6);
@@ -571,17 +538,16 @@ const fs = `
     float tp = (u_planeZ - ro2.z) / min(rd2.z, -0.001);
     vec3 qq = ro2 + rd2 * tp;
     vec2 luv = vec2(qq.x / (2.0 * u_logoHalfW), qq.y / (2.0 * u_logoHalfH)) + 0.5;
-    return bgAt(luv);   // 背景は完全な黒。ロゴ(白)だけが浮かぶ
+    return bgAt(luv);
   }
 
   void main(){
     vec2 uv  = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
-    vec2 suv = gl_FragCoord.xy / u_resolution.xy;   // 0..1 スクリーン座標
+    vec2 suv = gl_FragCoord.xy / u_resolution.xy;
 
     vec3 ro = vec3(0.0, 0.0, 4.6);
-    vec3 rd = normalize(vec3(uv / u_scale, -2.2));  // u_scaleで液体を拡縮(背景は不変)
+    vec3 rd = normalize(vec3(uv / u_scale, -2.2));
 
-    // 実像は常に背後にある。休止時は液体が全面を覆うので見えず、飛び散って液体が無くなると見える
     vec3 bg = background(suv);
     vec3 col = bg;
 
@@ -595,7 +561,7 @@ const fs = `
       if (d < 0.0012){
         hit = true;
         vec3 n  = getNormal(p);
-        // 水面のような微細なゆらぎ → 反射がきらめく(生き生き＆リアル)。ロゴも僅かに揺らぐ
+
         n = normalize(n + 0.045 * vec3(
           sin(p.y * 20.0 + u_time * 1.4),
           sin(p.z * 20.0 + u_time * 1.1),
@@ -604,49 +570,44 @@ const fs = `
         vec3 vd = -rd;
 
         vec3 hlf  = normalize(normalize(vec3(0.5, 0.9, 0.8)) + vd);
-        float spec = pow(max(dot(n, hlf), 0.0), 90.0);      // 1点の上品なハイライト
-        float fres = pow(1.0 - max(dot(n, vd), 0.0), 4.0);  // 縁を引き締める
+        float spec = pow(max(dot(n, hlf), 0.0), 90.0);
+        float fres = pow(1.0 - max(dot(n, vd), 0.0), 4.0);
 
-        // 屈折: 背後のロゴ"平面"へ屈折レイを飛ばして交差＝物理的に1枚の連続した歪み像
         vec3 rdir = refract(rd, n, 0.72);
         float tp = (u_planeZ - p.z) / min(rdir.z, -0.001);
         vec3 q = p + rdir * tp;
         vec2 luv = vec2(q.x / (2.0 * u_logoHalfW), q.y / (2.0 * u_logoHalfH)) + 0.5;
-        float dsp = u_disp * (0.3 + fres); // プリズム的な分光（全体に薄く＋縁で強く）= C4D的
+        float dsp = u_disp * (0.3 + fres);
         vec3 refr = vec3(
           bgAt(luv + vec2(dsp, 0.0)).r,
           bgAt(luv).g,
           bgAt(luv - vec2(dsp, 0.0)).b
         );
         refr *= u_glassTint;
-        // 厚み計測 → Beer-Lambert吸収（厚い所ほど暗い＝体積感）。色はニュートラル(茶濁り防止)
+
         float thick = 0.0;
         vec3 ip = p + rdir * 0.02;
-        for (int k = 0; k < 10; k++){    // 厚み計測(14→10、ステップ拡大で同範囲)
+        for (int k = 0; k < 10; k++){
           if (mapScene(ip) > 0.0) break;
           ip += rdir * 0.085;
           thick += 0.085;
         }
-        refr *= exp(-thick * u_absorb * vec3(1.02, 1.0, 0.97)); // ほぼ無彩色＋ごく僅か寒色
+        refr *= exp(-thick * u_absorb * vec3(1.02, 1.0, 0.97));
 
-        // 反射: 控えめな映り込み（分光なし）
         vec3 envCol = env(reflect(rd, n));
 
-        vec3 glass = mix(refr, envCol, 0.1 + fres * 0.6);  // 全体に薄く＋縁で強く反射＝艶
-        glass += spec * 1.6;                          // ハイライト
-        glass += pow(fres, 1.5) * vec3(0.55);         // 水滴らしい明るい細リム(白)
-        glass += fres * u_accent * 0.06;              // ごく僅かな差し色
+        vec3 glass = mix(refr, envCol, 0.1 + fres * 0.6);
+        glass += spec * 1.6;
+        glass += pow(fres, 1.5) * vec3(0.55);
+        glass += fres * u_accent * 0.06;
 
-        col = glass;   // ガラスは背景(実像)を通さない。自分の屈折(歪み像)だけを映す
+        col = glass;
         break;
       }
       t += d;
       if (t > 11.0) break;
     }
 
-    // （青い光輪は廃止。飛沫は黒背景に明るい白リム＋ハイライトで質感を出す）
-
-    // 階調: フィルミック(ACES) + ビネット + グレイン(黒部分には乗せない=純黒を保つ)
     col = aces(col * 1.06);
     col *= 1.05 - length(uv) * 0.18;
     float lum = max(col.r, max(col.g, col.b));
