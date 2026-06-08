@@ -258,10 +258,10 @@ function draw(){
   myShader.setUniform('u_cutAmt', cutAmt);
   myShader.setUniform('u_cutWidth', CONFIG.cutWidth);
   sceneG.beginShape();
-  sceneG.vertex(-1, -1, 0, 0, 0);
-  sceneG.vertex( 1, -1, 0, 1, 0);
-  sceneG.vertex( 1,  1, 0, 1, 1);
-  sceneG.vertex(-1,  1, 0, 0, 1);
+  sceneG.vertex(-1, -1, 0);
+  sceneG.vertex( 1, -1, 0);
+  sceneG.vertex( 1,  1, 0);
+  sceneG.vertex(-1,  1, 0);
   sceneG.endShape(CLOSE);
 
   // ===== パス2: 水滴レイヤー(シーンを実際に屈折) =====
@@ -272,10 +272,10 @@ function draw(){
   postShader.setUniform('u_drops', dropBuf);
   postShader.setUniform('u_sceneFlip', 1.0);
   beginShape();
-  vertex(-1, -1, 0, 0, 0);
-  vertex( 1, -1, 0, 1, 0);
-  vertex( 1,  1, 0, 1, 1);
-  vertex(-1,  1, 0, 0, 1);
+  vertex(-1, -1, 0);
+  vertex( 1, -1, 0);
+  vertex( 1,  1, 0);
+  vertex(-1,  1, 0);
   endShape(CLOSE);
 
   adaptResolution();
