@@ -67,8 +67,11 @@ let mx = 0, my = 0, tmx = 0, tmy = 0;
 let vmx = 0, vmy = 0;
 let lastInteract = -99999;
 
-let numDrops = 28;
-let pos, vel, home, masses;
+const MAXP = 40, BASE = 6;
+let nActive = BASE;
+let pos = new Float32Array(MAXP * 3);
+let vel = new Float32Array(MAXP * 3);
+let rad = new Float32Array(MAXP);
 let agit = 0;
 let dissolve = 0;
 let cutNX = 1, cutNY = 0, cutAmt = 0;
@@ -159,15 +162,19 @@ function setup(){
       lastScrollMsg = millis();
     }
   });
-  pos = new Float32Array(numDrops * 3);
-  vel = new Float32Array(numDrops * 3);
-  home = new Float32Array(numDrops * 3);
-  masses = [];
-  for (let i = 0; i < numDrops; i++){
-    const v = p5.Vector.random3D().mult(random(0.22, 0.58));
-    home[i*3] = v.x; home[i*3+1] = v.y; home[i*3+2] = v.z;
-    pos[i*3]  = v.x; pos[i*3+1]  = v.y; pos[i*3+2]  = v.z;
-    masses.push(random(0.3, 1.8));
+  resetParticles();
+}
+function resetParticles(){
+  nActive = BASE;
+  for (let i = 0; i < MAXP; i++){
+    if (i < BASE){
+      const v = p5.Vector.random3D().mult(random(0.12, 0.40));
+      pos[i*3] = v.x; pos[i*3+1] = v.y; pos[i*3+2] = v.z;
+      rad[i] = random(0.15, 0.22);
+    } else {
+      rad[i] = 0;
+    }
+    vel[i*3] = vel[i*3+1] = vel[i*3+2] = 0;
   }
 }
 function windowResized(){
@@ -202,6 +209,7 @@ function draw(){
   vmx += (tmx - mx) * 0.022; vmx *= 0.86; mx += vmx;
   vmy += (tmy - my) * 0.022; vmy *= 0.86; my += vmy;
   stepSim();
+  if (agit < 0.05 && now - lastInteract > 2200 && frameCount % 12 === 0) mergeStep();
   cutAmt *= 0.88;
   dissolve *= 0.992;
   updateDrops();
@@ -222,7 +230,8 @@ function draw(){
   myShader.setUniform('u_rotation', [0.0, 0.0]);
   myShader.setUniform('u_directions', pos);
   myShader.setUniform('u_vel', vel);
-  myShader.setUniform('u_masses', masses);
+  myShader.setUniform('u_rad', rad);
+  myShader.setUniform('u_nActive', nActive);
   myShader.setUniform('u_accent', CONFIG.accent);
   myShader.setUniform('u_bg', bgTex);
   myShader.setUniform('u_glassTint', CONFIG.glassTint);
@@ -263,32 +272,71 @@ function draw(){
 }
 
 function stepSim(){
-  const k = 0.010, damp = 0.94, g = 0.0005;
-  let e = 0;
-  for (let i = 0; i < numDrops; i++){
+  const kHome = 0.011, damp = 0.94, g = 0.0004, kRep = 0.05;
+  for (let i = 0; i < nActive; i++){
     const o = i * 3;
-
-    vel[o]   += (home[o]   - pos[o])   * k + (Math.random() - 0.5) * 0.0006;
-    vel[o+1] += (home[o+1] - pos[o+1]) * k - g + (Math.random() - 0.5) * 0.0006;
-    vel[o+2] += (home[o+2] - pos[o+2]) * k + (Math.random() - 0.5) * 0.0006;
+    let fx = -pos[o] * kHome;
+    let fy = -pos[o+1] * kHome - g;
+    let fz = -pos[o+2] * kHome;
+    for (let j = 0; j < nActive; j++){
+      if (j === i) continue;
+      const p = j * 3;
+      const dx = pos[o] - pos[p], dy = pos[o+1] - pos[p+1], dz = pos[o+2] - pos[p+2];
+      const dist = Math.hypot(dx, dy, dz) || 1e-4;
+      const md = (rad[i] + rad[j]) * 0.85;
+      if (dist < md){ const f = (md - dist) / md * kRep; fx += dx/dist*f; fy += dy/dist*f; fz += dz/dist*f; }
+    }
+    fx += (Math.random() - 0.5) * 0.0006;
+    fy += (Math.random() - 0.5) * 0.0006;
+    fz += (Math.random() - 0.5) * 0.0006;
+    vel[o] += fx; vel[o+1] += fy; vel[o+2] += fz;
     vel[o] *= damp; vel[o+1] *= damp; vel[o+2] *= damp;
+  }
+  let e = 0;
+  for (let i = 0; i < nActive; i++){
+    const o = i * 3;
     pos[o] += vel[o]; pos[o+1] += vel[o+1]; pos[o+2] += vel[o+2];
     e += Math.hypot(vel[o], vel[o+1], vel[o+2]);
   }
-  agit = constrain((e / numDrops) * 16.0, 0, 1);
+  agit = constrain((e / nActive) * 16.0, 0, 1);
 }
-function impulseTap(str){
-  for (let i = 0; i < numDrops; i++){
-    const o = i * 3;
-    const L = Math.hypot(pos[o], pos[o+1], pos[o+2]) || 1;
-    const s = str / masses[i];
-    vel[o]   += pos[o]   / L * s + (Math.random() - 0.5) * str;
-    vel[o+1] += pos[o+1] / L * s + (Math.random() - 0.5) * str;
-    vel[o+2] += pos[o+2] / L * s + (Math.random() - 0.5) * str;
+function splitParticles(str){          // タップ=各粒が2つに分裂(指数関数的に増える)＋刺々しく弾ける
+  const cur = nActive;
+  for (let i = 0; i < cur && nActive < MAXP; i++){
+    const j = nActive++;
+    const o = i * 3, p = j * 3;
+    const rr = rad[i] * 0.7937;        // 体積を保ちつつ半径を縮小(2^-1/3)
+    rad[i] = rr; rad[j] = rr;
+    pos[p]   = pos[o]   + (Math.random() - 0.5) * 0.04;
+    pos[p+1] = pos[o+1] + (Math.random() - 0.5) * 0.04;
+    pos[p+2] = pos[o+2] + (Math.random() - 0.5) * 0.04;
+    let vx = Math.random() - 0.5, vy = Math.random() - 0.5, vz = Math.random() - 0.5;
+    const L = Math.hypot(vx, vy, vz) || 1; vx /= L; vy /= L; vz /= L;
+    vel[o]   += vx * str; vel[o+1] += vy * str; vel[o+2] += vz * str;  // 親子で逆向きに飛ぶ
+    vel[p]    = -vx * str; vel[p+1]  = -vy * str; vel[p+2]  = -vz * str;
   }
 }
+function mergeStep(){                   // 落ち着いたら最近接ペアを融合→徐々に再形成
+  if (nActive <= BASE) return;
+  let bi = 0, bj = 1, bd = 1e9;
+  for (let i = 0; i < nActive; i++) for (let j = i + 1; j < nActive; j++){
+    const d = Math.hypot(pos[i*3]-pos[j*3], pos[i*3+1]-pos[j*3+1], pos[i*3+2]-pos[j*3+2]);
+    if (d < bd){ bd = d; bi = i; bj = j; }
+  }
+  const oi = bi*3, oj = bj*3;
+  pos[oi] = (pos[oi]+pos[oj])*0.5; pos[oi+1] = (pos[oi+1]+pos[oj+1])*0.5; pos[oi+2] = (pos[oi+2]+pos[oj+2])*0.5;
+  vel[oi] = (vel[oi]+vel[oj])*0.5; vel[oi+1] = (vel[oi+1]+vel[oj+1])*0.5; vel[oi+2] = (vel[oi+2]+vel[oj+2])*0.5;
+  rad[bi] = Math.cbrt(rad[bi]**3 + rad[bj]**3);
+  const last = nActive - 1;
+  if (bj !== last){
+    pos[bj*3]=pos[last*3]; pos[bj*3+1]=pos[last*3+1]; pos[bj*3+2]=pos[last*3+2];
+    vel[bj*3]=vel[last*3]; vel[bj*3+1]=vel[last*3+1]; vel[bj*3+2]=vel[last*3+2];
+    rad[bj]=rad[last];
+  }
+  nActive--;
+}
 function impulseCut(nx, ny, str){
-  for (let i = 0; i < numDrops; i++){
+  for (let i = 0; i < nActive; i++){
     const o = i * 3;
     const side = (pos[o] * nx + pos[o+1] * ny) >= 0 ? 1 : -1;
     vel[o]   += nx * side * str;
@@ -305,8 +353,8 @@ function poke(px, py){
 
   const prox = constrain(1.0 - Math.hypot(tx - mx, ty - my) * 1.6, 0.0, 1.0);
   if (prox <= 0.02) return;
-  impulseTap((0.09 + rapid * 0.16) * prox);
-  dissolve = min(1.0, dissolve + (0.05 + rapid * 0.14) * prox);
+  splitParticles((0.07 + rapid * 0.12) * prox);
+  dissolve = min(1.0, dissolve + (0.03 + rapid * 0.10) * prox);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
 }
@@ -419,9 +467,10 @@ const fs = `
   uniform vec2  u_mouse;
   uniform float u_agit;
   uniform vec2  u_rotation;
-  uniform vec3  u_directions[28];
-  uniform vec3  u_vel[28];
-  uniform float u_masses[28];
+  uniform vec3  u_directions[40];
+  uniform vec3  u_vel[40];
+  uniform float u_rad[40];
+  uniform float u_nActive;
   uniform vec3  u_accent;
   uniform sampler2D u_bg;
   uniform float u_glassTint;
@@ -468,18 +517,17 @@ const fs = `
     vec3 mousePos = vec3(u_mouse * 0.6, 0.0);
     float d = 1e10;
 
-    float blendK = mix(0.40, 0.05, u_agit);
-    for (int i = 0; i < 28; i++){
+    float blendK = mix(0.34, 0.025, u_agit);   // 興奮で鋭く=刺々しい / 安定で滑らかな球
+    for (int i = 0; i < 40; i++){
+      if (float(i) >= u_nActive) break;
       vec3 parentPos = mousePos + u_directions[i];
-      float m = u_masses[i];
-      float pSize = (0.05 + m * 0.07) * (1.0 - 0.45 * u_agit) * (1.0 - u_dissolve);
+      float pSize = u_rad[i] * (1.0 - u_dissolve);
 
       vec3 rel = p - parentPos;
       vec3 v = u_vel[i];
       float vl = length(v);
-      if (vl > 1e-4) rel -= (v / vl) * dot(rel, v / vl) * min(vl * 9.0, 0.55);
-      float ripple = sin(length(rel) * 18.0 - u_time * 9.0) * 0.015 * u_agit;
-      float drop = length(rel) - (pSize + ripple);
+      if (vl > 1e-4) rel -= (v / vl) * dot(rel, v / vl) * min(vl * 13.0, 0.8); // 速いほど刺状に伸びる
+      float drop = length(rel) - pSize;
       d = smin(d, drop, blendK);
     }
 
