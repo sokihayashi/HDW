@@ -234,7 +234,7 @@ function draw(){
   myShader.setUniform('u_flip', CONFIG.flipBg ? 1.0 : 0.0);
   myShader.setUniform('u_scale', formScaleFactor());
   myShader.setUniform('u_logoRot', logoRot);
-  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.82 * agit) * (1.0 - dissolve));
+  myShader.setUniform('u_core', CONFIG.coreSize * (1.0 - 0.90 * agit) * (1.0 - dissolve));
   myShader.setUniform('u_dissolve', dissolve);
   myShader.setUniform('u_cutDir', [cutNX, cutNY]);
   myShader.setUniform('u_cutAmt', cutAmt);
@@ -305,7 +305,7 @@ function poke(px, py){
 
   const prox = constrain(1.0 - Math.hypot(tx - mx, ty - my) * 1.6, 0.0, 1.0);
   if (prox <= 0.02) return;
-  impulseTap((0.06 + rapid * 0.12) * prox);
+  impulseTap((0.09 + rapid * 0.16) * prox);
   dissolve = min(1.0, dissolve + (0.05 + rapid * 0.14) * prox);
   spawnDrops(Math.floor(1 + rapid * 3));
   lastInteract = now;
@@ -485,6 +485,7 @@ const fs = `
 
     float core = length(p - mousePos) - u_core;
     d = smin(d, core, 0.40);
+    d += (sin(p.x * 24.0) * sin(p.y * 26.0) * sin(p.z * 22.0)) * 0.016 * clamp(u_agit + u_dissolve, 0.0, 1.0);
 
     if (u_cutAmt > 0.001){
       d = max(d, u_cutWidth * u_cutAmt - abs(dot(p.xy - mousePos.xy, u_cutDir)));
