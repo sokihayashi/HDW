@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SCRIPT SHADOW — 陰影を台本に置き換える</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js"></script>
+<style>
+  :root{ --bg:#15161a; --panel:#1d1f25; --line:#2c2f37; --txt:#e8e9ec; --sub:#9aa0ab; --accent:#4f8cff; }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--txt);
+    font-family:"Noto Sans JP",system-ui,sans-serif; -webkit-user-select:none; user-select:none; }
+  #app{ display:flex; height:100vh; }
+  /* ---- 左：操作パネル ---- */
+  #panel{ width:320px; flex:0 0 320px; height:100%; overflow-y:auto; background:var(--panel);
+    border-right:1px solid var(--line); padding:16px 16px 40px; }
+  #panel h1{ font-size:15px; letter-spacing:.08em; margin:2px 0 2px; }
+  #panel .desc{ font-size:11px; color:var(--sub); line-height:1.6; margin:0 0 16px; }
+  .grp{ border-top:1px solid var(--line); padding:14px 0 4px; }
+  .grp h2{ font-size:11px; letter-spacing:.1em; color:var(--sub); margin:0 0 10px; font-weight:600; }
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin:9px 0; }
+  .row label{ font-size:12px; color:var(--txt); flex:0 0 auto; }
+  .row .val{ font-size:11px; color:var(--sub); min-width:34px; text-align:right; font-variant-numeric:tabular-nums; }
+  input[type=range]{ flex:1; accent-color:var(--accent); }
+  select, textarea, input[type=file]{ width:100%; background:#14151a; color:var(--txt);
+    border:1px solid var(--line); border-radius:6px; padding:7px 8px; font-size:12px; font-family:inherit; }
+  textarea{ height:120px; resize:vertical; line-height:1.5; }
+  .seg{ display:flex; gap:6px; }
+  .seg button{ flex:1; }
+  button{ background:#262932; color:var(--txt); border:1px solid var(--line); border-radius:6px;
+    padding:8px 10px; font-size:12px; cursor:pointer; font-family:inherit; }
+  button:hover{ border-color:#3c424f; }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.active{ background:#2f3645; border-color:var(--accent); }
+  .chk{ display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer; }
+  .hint{ font-size:10.5px; color:var(--sub); line-height:1.5; margin:6px 0 0; }
+  /* ---- 右：キャンバス ---- */
+  #stage{ flex:1; position:relative; display:flex; align-items:center; justify-content:center;
+    background:#0e0f12; overflow:hidden; }
+  #stage.drag{ outline:2px dashed var(--accent); outline-offset:-12px; }
+  #holder canvas{ max-width:calc(100vw - 360px); max-height:calc(100vh - 32px);
+    box-shadow:0 8px 40px rgba(0,0,0,.5); background:#fff; }
+  #status{ position:absolute; top:12px; left:12px; font-size:11px; color:var(--sub);
+    background:rgba(0,0,0,.45); padding:5px 9px; border-radius:5px; pointer-events:none; }
+  #drophint{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#5c6270; font-size:13px; pointer-events:none; text-align:center; line-height:1.8; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>SCRIPT SHADOW</h1>
+    <p class="desc">写真の<b>陰影</b>を、台本の<b>文字</b>に置き換えるタイポグラフィ・ポートレート。<br>
+      暗い所ほど大きな黒い文字、明るい所は小さく/空白に。<br>
+      <b>人物を切り抜き・背景を白</b>にした画像を読み込んでください。</p>
+
+    <div class="grp">
+      <h2>素材</h2>
+      <div class="row"><label>画像</label></div>
+      <input type="file" id="fileImg" accept="image/*" />
+      <p class="hint">右側にドラッグ＆ドロップでもOK。</p>
+      <div class="row" style="margin-top:12px"><label>台本 / セリフ</label></div>
+      <textarea id="script" spellcheck="false"></textarea>
+      <p class="hint">この文字列を1文字ずつ、影の濃い所から順に流し込みます。改行・空白は無視。</p>
+    </div>
+
+    <div class="grp">
+      <h2>濃淡 → 文字</h2>
+      <div class="row"><label>密度（グリッド列数）</label><span class="val" id="vCols"></span></div>
+      <input type="range" id="cols" min="40" max="320" step="2" />
+      <div class="row"><label>コントラスト</label><span class="val" id="vGamma"></span></div>
+      <input type="range" id="gamma" min="0.3" max="3.0" step="0.05" />
+      <div class="row"><label>白とばし（しきい値）</label><span class="val" id="vThresh"></span></div>
+      <input type="range" id="thresh" min="0" max="0.6" step="0.01" />
+      <div class="row"><label>最小サイズ</label><span class="val" id="vMin"></span></div>
+      <input type="range" id="minF" min="0" max="0.8" step="0.02" />
+      <div class="row"><label>最大サイズ</label><span class="val" id="vMax"></span></div>
+      <input type="range" id="maxF" min="0.8" max="1.6" step="0.02" />
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="invert" /> 明暗反転（明るい所に文字）</label>
+    </div>
+
+    <div class="grp">
+      <h2>フォント（和文 Google Fonts）</h2>
+      <div class="row"><label>切り替え単位</label></div>
+      <div class="seg" data-seg="fontMode">
+        <button data-v="cell">1文字ごと</button>
+        <button data-v="row">行ごと</button>
+        <button data-v="one">1種類</button>
+      </div>
+      <select id="oneFont" style="margin-top:8px; display:none"></select>
+      <p class="hint" id="fontCount"></p>
+    </div>
+
+    <div class="grp">
+      <h2>組み方向</h2>
+      <div class="seg" data-seg="dir">
+        <button data-v="h">横組み（左→右）</button>
+        <button data-v="v">縦組み（右→左）</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="seg">
+        <button id="reseed">フォント再シャッフル</button>
+        <button id="save" class="primary">PNG書き出し</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="stage">
+    <div id="holder"></div>
+    <div id="status"></div>
+    <div id="drophint">人物切り抜き画像（背景白）を<br>ドロップ／選択してください</div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — 既定値（UIから上書きされる）
+   ============================================================ */
+const CONFIG = {
+  longSide : 1500,   // 内部レンダリングの長辺px（書き出し解像度）
+  cols     : 140,    // 列数（=密度）
+  gamma    : 1.25,   // コントラスト（>1で陰影をくっきり）
+  thresh   : 0.07,   // これより明るいセルは空白（白とばし）
+  minF     : 0.12,   // 文字サイズ最小（セル比）
+  maxF     : 1.22,   // 文字サイズ最大（セル比 / >1で隣と重なり真っ黒に）
+  fontMode : 'cell', // 'cell' | 'row' | 'one'
+  dir      : 'h',    // 'h' 横 / 'v' 縦
+  invert   : false,
+  seed     : 1234,
+};
+
+/* 和文 Google Fonts（必要な文字だけ text= でサブセット読み込み） */
+const FONTS = [
+  "Noto Sans JP","Noto Serif JP","M PLUS 1p","M PLUS Rounded 1c",
+  "Kosugi","Kosugi Maru","Sawarabi Mincho","Sawarabi Gothic",
+  "Zen Maru Gothic","Zen Kaku Gothic New","Zen Old Mincho","Zen Antique",
+  "Shippori Mincho","Kaisei Decol","Kaisei Tokumin","Kaisei Opti",
+  "BIZ UDPMincho","BIZ UDPGothic","Yuji Syuku","Klee One",
+  "Dela Gothic One","RocknRoll One","Reggae One","Yusei Magic",
+  "DotGothic16","Stick","Rampart One","New Tegomin","Hachi Maru Pop","Potta One"
+];
+
+const DEFAULT_SCRIPT =
+`――幕が上がる。誰もいない舞台に、ひとすじの光が落ちている。
+女「ねえ、まだそこにいる？」
+男「いるよ。ずっと、ここにいた。」
+女「見えないのに？」
+男「見えなくても、声は届く。影みたいに、君の輪郭をなぞっている。」
+女「じゃあ、わたしが黙ったら、あなたは消えるの？」
+男「いや。そのときは、君の沈黙の形になって残る。」
+女「……こわいことを言うのね。」
+男「光が強いほど、影は濃くなる。それだけのことさ。」
+女「幕が下りても？」
+男「幕が下りても、ここに文字として残る。読んでくれる誰かがいる限り。」`;
+
+/* ============================================================
+   状態
+   ============================================================ */
+let srcImg = null;          // 読み込んだ p5.Image
+let samp = null;            // サンプリング用バッファ（contain配置・白背景）
+let canvasW = 1200, canvasH = 1500;
+let glyphs = "";            // 描画に使う文字列（空白除去）
+let fontsReady = false;
+let needRender = false;
+
+/* ============================================================
+   p5
+   ============================================================ */
+function setup(){
+  computeCanvasSize();
+  const cnv = createCanvas(canvasW, canvasH);
+  cnv.parent("holder");
+  pixelDensity(1);
+  noLoop();
+  textAlign(CENTER, CENTER);
+  background(255);
+  initUI();
+  glyphs = cleanText(byId("script").value);
+  loadFontsFor(glyphs);   // 既定スクリプト分のフォント読込 → 完了で render
+  setStatus("フォント読み込み中…");
+}
+
+/* 画像のアスペクトに合わせて内部キャンバス寸法を決める */
+function computeCanvasSize(){
+  const L = CONFIG.longSide;
+  let ar = srcImg ? srcImg.width / srcImg.height : 0.8; // 既定は縦長
+  if(ar >= 1){ canvasW = L; canvasH = Math.round(L/ar); }
+  else       { canvasH = L; canvasW = Math.round(L*ar); }
+}
+
+/* ============================================================
+   サンプリング用バッファ（画像をcontain配置・周囲は白）
+   ============================================================ */
+function buildSampleBuffer(){
+  samp = createGraphics(canvasW, canvasH);
+  samp.pixelDensity(1);
+  samp.background(255);
+  if(srcImg){
+    const ar = srcImg.width / srcImg.height;
+    let dw = canvasW, dh = canvasW/ar;
+    if(dh > canvasH){ dh = canvasH; dw = canvasH*ar; }
+    samp.image(srcImg, (canvasW-dw)/2, (canvasH-dh)/2, dw, dh);
+  }
+  samp.loadPixels();
+}
+
+function lumAt(px, py){
+  px = constrain(px|0, 0, canvasW-1);
+  py = constrain(py|0, 0, canvasH-1);
+  const i = 4*(py*canvasW + px);
+  const p = samp.pixels;
+  return 0.299*p[i] + 0.587*p[i+1] + 0.114*p[i+2]; // 0..255
+}
+
+/* ============================================================
+   レンダリング本体
+   ============================================================ */
+function render(){
+  if(!fontsReady){ needRender = true; return; }
+  buildSampleBuffer();
+  background(255);
+  noStroke();
+  fill(0);
+  textAlign(CENTER, CENTER);
+
+  const cell = canvasW / CONFIG.cols;
+  const cols = CONFIG.cols;
+  const rows = Math.max(1, Math.floor(canvasH / cell));
+  const rng  = mulberry32(CONFIG.seed);
+  // 行/全体用に固定フォントを先に割り当て（再現性のため）
+  const rowFont = [];
+  for(let r=0;r<rows;r++) rowFont[r] = FONTS[(rng()*FONTS.length)|0];
+  const theOne = byId("oneFont").value || FONTS[0];
+
+  let gi = 0; // 文字インデックス
+  const drawCell = (gx, gy) => {
+    const cx = gx*cell + cell/2;
+    const cy = gy*cell + cell/2;
+    const lum = lumAt(cx, cy);
+    let d = CONFIG.invert ? (lum/255) : (1 - lum/255); // 暗さ 0..1
+    if(d <= CONFIG.thresh) return;                      // 白とばし
+    let t = (d - CONFIG.thresh) / (1 - CONFIG.thresh);  // 0..1
+    t = Math.pow(constrain(t,0,1), CONFIG.gamma);
+    const size = cell * (CONFIG.minF + (CONFIG.maxF - CONFIG.minF)*t);
+
+    let fam;
+    if(CONFIG.fontMode === 'one') fam = theOne;
+    else if(CONFIG.fontMode === 'row') fam = rowFont[CONFIG.dir==='v'?gx:gy];
+    else fam = FONTS[(hash2(gx,gy,CONFIG.seed)*FONTS.length)|0];
+
+    const ch = glyphs.charAt(gi % glyphs.length); gi++;
+    textFont(fam);
+    textSize(size);
+    text(ch, cx, cy);
+  };
+
+  if(CONFIG.dir === 'v'){
+    // 縦組み：右の列から、各列を上→下
+    for(let gx=cols-1; gx>=0; gx--)
+      for(let gy=0; gy<rows; gy++) drawCell(gx, gy);
+  }else{
+    // 横組み：上の行から、各行を左→右
+    for(let gy=0; gy<rows; gy++)
+      for(let gx=0; gx<cols; gx++) drawCell(gx, gy);
+  }
+
+  setStatus(`${canvasW}×${canvasH}px ／ ${cols}×${rows} セル ／ 文字数 ${glyphs.length} ／ フォント ${FONTS.length}`);
+  byId("drophint").style.display = srcImg ? "none" : "flex";
+}
+
+/* ============================================================
+   Google Fonts を必要文字だけサブセット読み込み
+   ============================================================ */
+let fontLink = null;
+function loadFontsFor(text){
+  fontsReady = false;
+  const uniq = Array.from(new Set((text||"").split(''))).filter(c=>c.trim()!=="");
+  // 文字が無ければ最低限ASCIIを入れておく
+  if(uniq.length===0) uniq.push('あ');
+  const fams = FONTS.map(f => "family=" + f.replace(/ /g,"+")).join("&");
+  const url = "https://fonts.googleapis.com/css2?" + fams +
+              "&text=" + encodeURIComponent(uniq.join("")) + "&display=swap";
+
+  if(!fontLink){ fontLink = document.createElement("link"); fontLink.rel="stylesheet"; document.head.appendChild(fontLink); }
+  fontLink.href = url;
+
+  // 各フォントの実フェッチを強制 → 全部揃ったら render
+  const sample = uniq.slice(0,12).join("") || "あ";
+  const proms = FONTS.map(f => document.fonts.load(`32px "${f}"`, sample).catch(()=>{}));
+  Promise.all(proms).then(()=>document.fonts.ready).then(()=>{
+    fontsReady = true;
+    setStatus("");
+    render();
+  });
+  // 念のためのフォールバック（ネット制限時も描画はする）
+  setTimeout(()=>{ if(!fontsReady){ fontsReady=true; render(); } }, 6000);
+}
+
+/* ============================================================
+   ユーティリティ
+   ============================================================ */
+function cleanText(s){ return (s||"").replace(/\s+/g,""); } // 空白・改行除去
+function byId(id){ return document.getElementById(id); }
+function setStatus(t){ const s=byId("status"); s.textContent=t; s.style.display=t?"block":"none"; }
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function hash2(x,y,s){ let h=(x*73856093)^(y*19349663)^(s*83492791); h=(h^(h>>>13))>>>0; return (h%100000)/100000; }
+
+/* ============================================================
+   UI 配線
+   ============================================================ */
+function initUI(){
+  byId("script").value = DEFAULT_SCRIPT;
+  byId("fontCount").textContent = `${FONTS.length}種の和文フォントを読み込み（必要文字だけサブセット）`;
+
+  // 1種モード用セレクト
+  const sel = byId("oneFont");
+  FONTS.forEach(f=>{ const o=document.createElement("option"); o.value=f; o.textContent=f; sel.appendChild(o); });
+
+  // スライダー結線
+  const sliders = [
+    ["cols","cols","vCols", v=>v|0],
+    ["gamma","gamma","vGamma", v=>(+v).toFixed(2)],
+    ["thresh","thresh","vThresh", v=>(+v).toFixed(2)],
+    ["minF","minF","vMin", v=>(+v).toFixed(2)],
+    ["maxF","maxF","vMax", v=>(+v).toFixed(2)],
+  ];
+  sliders.forEach(([id,key,vid,fmt])=>{
+    const el=byId(id); el.value=CONFIG[key];
+    byId(vid).textContent=fmt(CONFIG[key]);
+    el.addEventListener("input",()=>{ CONFIG[key]=+el.value; byId(vid).textContent=fmt(el.value); render(); });
+  });
+
+  byId("invert").checked = CONFIG.invert;
+  byId("invert").addEventListener("change",e=>{ CONFIG.invert=e.target.checked; render(); });
+
+  // セグメントボタン（fontMode / dir）
+  document.querySelectorAll('[data-seg]').forEach(seg=>{
+    const key = seg.getAttribute('data-seg');
+    seg.querySelectorAll('button').forEach(b=>{
+      if(b.getAttribute('data-v')===CONFIG[key]) b.classList.add('active');
+      b.addEventListener('click',()=>{
+        seg.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
+        b.classList.add('active');
+        CONFIG[key]=b.getAttribute('data-v');
+        byId("oneFont").style.display = (CONFIG.fontMode==='one') ? 'block' : 'none';
+        render();
+      });
+    });
+  });
+  byId("oneFont").addEventListener('change',()=>render());
+
+  // 台本変更 → フォントをサブセット再読込してから描画
+  let tmr=null;
+  byId("script").addEventListener('input',()=>{
+    clearTimeout(tmr);
+    tmr=setTimeout(()=>{ glyphs=cleanText(byId("script").value); setStatus("フォント読み込み中…"); loadFontsFor(glyphs); }, 400);
+  });
+
+  // 画像ファイル
+  byId("fileImg").addEventListener('change',e=>{ if(e.target.files[0]) loadImageFile(e.target.files[0]); });
+
+  // ドラッグ＆ドロップ
+  const stage=byId("stage");
+  ["dragenter","dragover"].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();stage.classList.add('drag');}));
+  ["dragleave","drop"].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();stage.classList.remove('drag');}));
+  stage.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f&&f.type.startsWith('image/')) loadImageFile(f); });
+
+  // ボタン
+  byId("reseed").addEventListener('click',()=>{ CONFIG.seed=(Math.random()*1e9)|0; render(); });
+  byId("save").addEventListener('click',()=>saveCanvas('script-shadow','png'));
+}
+
+function loadImageFile(file){
+  const url=URL.createObjectURL(file);
+  loadImage(url,img=>{
+    srcImg=img;
+    computeCanvasSize();
+    resizeCanvas(canvasW, canvasH);
+    URL.revokeObjectURL(url);
+    render();
+  }, ()=>{ setStatus("画像の読み込みに失敗しました"); });
+}
+</script>
+</body>
+</html>
